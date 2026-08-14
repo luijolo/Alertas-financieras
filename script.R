@@ -8,11 +8,24 @@ start_time <- Sys.time()
 token <- Sys.getenv("TELEGRAM_TOKEN")
 chat_id <- Sys.getenv("TELEGRAM_CHAT_ID")
 
+# Función con diagnóstico de respuesta
 send_telegram <- function(msg) {
   url <- paste0("https://api.telegram.org/bot", token, "/sendMessage")
-  POST(url, body = list(chat_id = chat_id, text = msg), encode = "form")
+  res <- POST(url, body = list(chat_id = chat_id, text = msg), encode = "form")
+  
+  # Imprimir la respuesta de Telegram en el log de GitHub
+  cat("--- RESPUESTA DE TELEGRAM ---\n")
+  cat("Código de Estado:", status_code(res), "\n")
+  cat("Detalle:", content(res, "text"), "\n")
+  cat("-----------------------------\n")
+  
+  if (status_code(res) != 200) {
+    stop(paste("Telegram rechazó el mensaje con código", status_code(res)))
+  }
 }
-send_telegram("Prueba exitosa: El bot de Telegram está conectado a GitHub")
+
+# Línea de prueba
+send_telegram("Prueba de conexión desde GitHub Actions")
 tryCatch({
   state_file <- "estado_hashes.json"
   old_hashes <- if (file.exists(state_file)) fromJSON(state_file) else list()
