@@ -41,31 +41,41 @@ tryCatch({
     file_url  <- df$link[i]
     dest_path <- file.path("temp_downloads", paste0("temp_", i))
     
-    res <- GET(file_url, write_disk(dest_path, overwrite = TRUE))
+    # Anti-caché: Evita descargar versiones viejas de la memoria web
+    sep <- if (grepl("\\?", file_url)) "&" else "?"
+    url_nocache <- paste0(file_url, sep, "nocache=", as.numeric(Sys.time()))
+    
+    res <- GET(
+      url_nocache, 
+      add_headers("Cache-Control" = "no-cache", "Pragma" = "no-cache"),
+      write_disk(dest_path, overwrite = TRUE)
+    )
     
     if (status_code(res) == 200) {
       current_hash <- NULL
-      
-      # 1. Probar si el archivo es un Excel válido (.xlsx o .xls)
       fmt <- excel_format(dest_path)
       
       if (!is.null(fmt)) {
+        # Lee TODAS las hojas del libro de Excel correctamente
         datos_excel <- tryCatch({
-          read_excel(dest_path, format = fmt)
-        }, error = function(err) NULL)
+          hojas <- excel_sheets(dest_path)
+          lapply(hojas, function(h) read_excel(dest_path, sheet = h))
+        }, error = function(err) {
+          tryCatch({ read_excel(dest_path) }, error = function(e) NULL)
+        })
         
         if (!is.null(datos_excel)) {
           current_hash <- digest(datos_excel, algo = "md5")
         }
       } else {
-        # 2. Si no es Excel, verificar si es un PDF (los PDF empiezan con %PDF)
+        # Soporte para archivos PDF
         first_bytes <- tryCatch(readChar(dest_path, nchars = 4), error = function(e) "")
         if (identical(first_bytes, "%PDF")) {
           current_hash <- digest(dest_path, algo = "md5", file = TRUE)
         }
       }
       
-      # 3. Comparar con el estado anterior
+      # Comparación de estado
       if (!is.null(current_hash)) {
         previous_hash <- old_hashes[[file_name]]
         
@@ -78,6 +88,7 @@ tryCatch({
     }
   }
   
+  # Escribir el nuevo JSON
   write_json(new_hashes, state_file, auto_unbox = TRUE, pretty = TRUE)
   
   if (length(archivos_actualizados) > 0) {
