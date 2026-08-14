@@ -2,7 +2,7 @@ library(httr)
 library(readxl)
 library(digest)
 library(jsonlite)
-send_telegram("Prueba exitosa: El bot de Telegram está conectado a GitHub")
+
 start_time <- Sys.time()
 
 token <- Sys.getenv("TELEGRAM_TOKEN")
@@ -12,7 +12,7 @@ send_telegram <- function(msg) {
   url <- paste0("https://api.telegram.org/bot", token, "/sendMessage")
   POST(url, body = list(chat_id = chat_id, text = msg), encode = "form")
 }
-
+send_telegram("Prueba exitosa: El bot de Telegram está conectado a GitHub")
 tryCatch({
   state_file <- "estado_hashes.json"
   old_hashes <- if (file.exists(state_file)) fromJSON(state_file) else list()
