@@ -8,16 +8,9 @@ start_time <- Sys.time()
 token <- Sys.getenv("TELEGRAM_TOKEN")
 chat_id <- Sys.getenv("TELEGRAM_CHAT_ID")
 
-# Función con diagnóstico de respuesta
 send_telegram <- function(msg) {
   url <- paste0("https://api.telegram.org/bot", token, "/sendMessage")
   res <- POST(url, body = list(chat_id = chat_id, text = msg), encode = "form")
-  
-  # Imprimir la respuesta de Telegram en el log de GitHub
-  cat("--- RESPUESTA DE TELEGRAM ---\n")
-  cat("Código de Estado:", status_code(res), "\n")
-  cat("Detalle:", content(res, "text"), "\n")
-  cat("-----------------------------\n")
   
   if (status_code(res) != 200) {
     stop(paste("Telegram rechazó el mensaje con código", status_code(res)))
@@ -42,7 +35,11 @@ tryCatch({
     res <- GET(file_url, write_disk(dest_path, overwrite = TRUE))
     
     if (status_code(res) == 200) {
-      current_hash <- digest(dest_path, algo = "md5", file = TRUE)
+      # 1. Leemos los datos reales del Excel
+      datos_excel <- read_excel(dest_path)
+      
+      # 2. Calculamos el hash sobre los DATOS (no sobre el archivo binario)
+      current_hash <- digest(datos_excel, algo = "md5")
       previous_hash <- old_hashes[[file_name]]
       
       if (!is.null(previous_hash) && current_hash != previous_hash) {
@@ -53,8 +50,8 @@ tryCatch({
     }
   }
   
-  # Guardar el nuevo estado
-  write_json(new_hashes, state_file, pretty = TRUE)
+  # Guardar el nuevo estado con formato JSON limpio
+  write_json(new_hashes, state_file, auto_unbox = TRUE, pretty = TRUE)
   
   # Si cambió algún archivo, enviar alerta
   if (length(archivos_actualizados) > 0) {
@@ -65,8 +62,8 @@ tryCatch({
     for (arch in archivos_actualizados) {
       msg <- paste0(
         "Hora revisión ", hora_str, "\n",
-        "Actualizacion \"", arch, "\"\n",
-        "Tiempo de ejecución: ", duration, "segundos"
+        "Actualización \"", arch, "\"\n",
+        "Tiempo de ejecución: ", duration, " segundos"
       )
       send_telegram(msg)
     }
