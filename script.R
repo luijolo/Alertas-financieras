@@ -24,8 +24,6 @@ send_telegram <- function(msg) {
   }
 }
 
-# Línea de prueba
-send_telegram("Prueba de conexión desde GitHub Actions")
 tryCatch({
   state_file <- "estado_hashes.json"
   old_hashes <- if (file.exists(state_file)) fromJSON(state_file) else list()
