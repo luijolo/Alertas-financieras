@@ -1,4 +1,4 @@
-name: Monitor Alertas DAM
+name: Alertas financieras
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  check-updates:
+  check-fondos:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repositorio
@@ -16,22 +16,22 @@ jobs:
       - name: Configurar R
         uses: r-lib/actions/setup-r@v2
 
-      - name: Instalar dependencias de R
+      - name: Instalar dependencias
         run: |
           options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/jammy/latest"))
-          install.packages(c("httr", "readxl", "digest", "jsonlite"))
+          install.packages(c("httr", "rvest", "jsonlite", "stringr"))
         shell: Rscript {0}
 
-      - name: Ejecutar Script
+      - name: Ejecutar Script de Fondos
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: Rscript script.R
+        run: Rscript script_fondos.R
 
-      - name: Guardar estado en GitHub
+      - name: Guardar estado
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add estado_hashes.json
-          git commit -m "Auto-update hash state" || exit 0
+          git add estado_fondos.json
+          git commit -m "Update fondos state" || exit 0
           git push
