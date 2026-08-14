@@ -38,33 +38,24 @@ tryCatch({
   # ==========================================
   # 1. FIDUCIARIA RESERVAS
   # ==========================================
-  cat("\n--- 1. PROCESANDO FIDUCIARIA RESERVAS ---\n")
+  cat("\n==========================================\n")
+  cat("1. PROCESANDO FIDUCIARIA RESERVAS\n")
+  cat("==========================================\n")
   url_fid <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
   res_fid <- GET(url_fid, ua)
   cat("Status Code:", status_code(res_fid), "\n")
   
   if (status_code(res_fid) == 200) {
-    web_fid <- read_html(res_fid)
+    html_raw_fid <- content(res_fid, "text", encoding = "UTF-8")
     
-    # Selector CSS del elemento proporcionado
-    css_fid <- "#quienes-somos table tr:nth-child(2) td:nth-child(2) em"
-    node_fid <- html_element(web_fid, css_fid)
+    # Buscar patrones de valor patrimonial en el texto crudo
+    val_raw <- str_extract(html_raw_fid, "1,\\d{3}\\.\\d{4,6}")
+    cat("Patrón extraído Fiduciaria:", val_raw, "\n")
     
-    # Fallback sin tag 'em' por si acaso
-    if (is.na(html_text(node_fid))) {
-      css_fid <- "#quienes-somos table tr:nth-child(2) td:nth-child(2)"
-      node_fid <- html_element(web_fid, css_fid)
-    }
-    
-    val_text <- html_text(node_fid, trim = TRUE)
-    cat("Texto Fiduciaria:", val_text, "\n")
-    
-    val_fid <- parse_number_dr(val_text)
-    cat("Valor numérico Fiduciaria:", val_fid, "\n")
+    val_fid <- parse_number_dr(val_raw)
     
     if (!is.na(val_fid)) {
       prev_fid <- old_state[["multiplaza_valor"]]
-      
       if (!is.null(prev_fid) && val_fid != prev_fid) {
         inv_fid <- val_fid * 20
         msg_fid <- paste0(
@@ -81,49 +72,49 @@ tryCatch({
   # ==========================================
   # 2. AFI UNIVERSAL
   # ==========================================
-  cat("\n--- 2. PROCESANDO AFI UNIVERSAL ---\n")
+  cat("\n==========================================\n")
+  cat("2. PROCESANDO AFI UNIVERSAL\n")
+  cat("==========================================\n")
   url_afi <- "https://www.afiuniversal.com.do/universal-liquidez/"
   res_afi <- GET(url_afi, ua)
   cat("Status Code:", status_code(res_afi), "\n")
   
   if (status_code(res_afi) == 200) {
-    web_afi <- read_html(res_afi)
+    html_raw_afi <- content(res_afi, "text", encoding = "UTF-8")
     
+    # Extraer todos los valores numéricos con formato de cuota (ej: 1,727.399462)
+    cuotas_encontradas <- str_extract_all(html_raw_afi, "\\b\\d{1,3}(,\\d{3})*\\.\\d{4,6}\\b")[[1]]
+    cat("Cuotas detectadas en HTML crudo:", length(cuotas_encontradas), "\n")
+    if (length(cuotas_encontradas) > 0) {
+      cat("Primeras cuotas:", paste(head(cuotas_encontradas, 5), collapse = ", "), "\n")
+    }
+
     fondos_afi <- list(
-      list(key = "uni_liq", name = "Cuota Universal Liquidez", mult = 57, row = 11),
-      list(key = "dep_flex", name = "Cuota Dep. Financiero Flexible", mult = 1, row = 8),
-      list(key = "plazo_dol", name = "Cuota Plazo mensual dólar", mult = 1, row = 2)
+      list(key = "uni_liq", name = "Cuota Universal Liquidez", mult = 57, match_num = "1,727"),
+      list(key = "dep_flex", name = "Cuota Dep. Financiero Flexible", mult = 1, match_num = "23,353"),
+      list(key = "plazo_dol", name = "Cuota Plazo mensual dólar", mult = 1, match_num = "1,344")
     )
 
     for (f in fondos_afi) {
-      # Probar selector con y sin tbody
-      css_1 <- paste0("#cifras tr:nth-child(", f$row, ") td:nth-child(6)")
-      css_2 <- paste0("#cifras tbody tr:nth-child(", f$row, ") td:nth-child(6)")
+      # Buscar patrón específico para cada fondo según su número base
+      patron <- paste0(f$match_num, "\\.\\d{4,6}")
+      val_text <- str_extract(html_raw_afi, patron)
+      val_num <- parse_number_dr(val_text)
       
-      node_val <- html_element(web_afi, css_1)
-      if (is.na(html_text(node_val))) {
-        node_val <- html_element(web_afi, css_2)
-      }
+      cat(f$name, "-> Extraído:", val_text, "| Parseado:", val_num, "\n")
       
-      txt_val <- html_text(node_val, trim = TRUE)
-      cat(f$name, "- Texto extraído:", txt_val, "\n")
-      
-      val_actual <- parse_number_dr(txt_val)
-      cat(f$name, "- Número parseado:", val_actual, "\n")
-      
-      if (!is.na(val_actual)) {
+      if (!is.na(val_num)) {
         prev_val <- old_state[[f$key]]
-        
-        if (!is.null(prev_val) && val_actual != prev_val) {
-          val_inv <- val_actual * f$mult
+        if (!is.null(prev_val) && val_num != prev_val) {
+          val_inv <- val_num * f$mult
           msg_afi <- paste0(
             fecha_hoy, "\n",
-            f$name, " ", format(val_actual, nsmall = 6), "\n",
+            f$name, " ", format(val_num, nsmall = 6), "\n",
             "Valor inversion ", format(val_inv, big.mark = ",", nsmall = 2)
           )
           send_telegram(msg_afi)
         }
-        new_state[[f$key]] <- val_actual
+        new_state[[f$key]] <- val_num
       }
     }
   }
@@ -131,21 +122,26 @@ tryCatch({
   # ==========================================
   # 3. CEVALDOM (OTC)
   # ==========================================
-  cat("\n--- 3. PROCESANDO CEVALDOM ---\n")
+  cat("\n==========================================\n")
+  cat("3. PROCESANDO CEVALDOM\n")
+  cat("==========================================\n")
   url_cev <- "https://www.cevaldom.com/mercado/otc/"
   res_cev <- GET(url_cev, ua)
   cat("Status Code:", status_code(res_cev), "\n")
   
   if (status_code(res_cev) == 200) {
-    web_cev <- read_html(res_cev)
-    filas_isin <- html_elements(web_cev, xpath = "//tr[contains(., 'DO9035100120')]")
-    cat("Filas con ISIN encontradas:", length(filas_isin), "\n")
+    html_raw_cev <- content(res_cev, "text", encoding = "UTF-8")
     
-    if (length(filas_isin) > 0) {
+    # Verificar si el ISIN está presente en el código HTML
+    tiene_isin <- grepl("DO9035100120", html_raw_cev)
+    cat("¿Existe el ISIN DO9035100120 en el HTML?:", tiene_isin, "\n")
+    
+    if (tiene_isin) {
+      web_cev <- read_html(html_raw_cev)
+      filas_isin <- html_elements(web_cev, xpath = "//tr[contains(., 'DO9035100120')]")
+      
       for (fila in filas_isin) {
         columnas <- html_elements(fila, "td") %>% html_text(trim = TRUE)
-        cat("Columnas de la fila:", paste(columnas, collapse = " | "), "\n")
-        
         if (length(columnas) >= 3) {
           hora_pacto <- columnas[1]
           precio_limpio <- columnas[length(columnas)]
@@ -169,9 +165,9 @@ tryCatch({
     }
   }
 
-  # Guardar estado actualizado
+  # Guardar estado en JSON
   write_json(new_state, state_file, auto_unbox = TRUE, pretty = TRUE)
-  cat("\n--- PROCESO FINALIZADO EXITOSAMENTE ---\n")
+  cat("\n--- PROCESO FINALIZADO --- Estado guardado en", state_file, "\n")
 
 }, error = function(e) {
   send_telegram(paste0("Error en script.R: ", e$message))
