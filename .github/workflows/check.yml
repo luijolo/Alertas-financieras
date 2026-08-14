@@ -1,9 +1,6 @@
 name: Monitor Alertas DAM
 
 on:
-  schedule:
-    # UTC-4 (Santo Domingo): Se ejecuta cada 5 min entre 8:00 AM y 7:00 PM L-V
-    - cron: '*/5 12-23 * * 1-5'
   workflow_dispatch:
 
 permissions:
