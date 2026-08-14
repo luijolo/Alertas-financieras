@@ -26,7 +26,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: Rscript script_fondos.R
+        run: Rscript script.R
 
       - name: Guardar estado
         run: |
