@@ -21,7 +21,7 @@ parse_number_dr <- function(text) {
   clean_text <- gsub(",", "", clean_text)
   as.numeric(clean_text)
 }
-
+send_telegram("Prueba de conexión exitosa desde script.R 🚀")
 ua <- user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 tryCatch({
