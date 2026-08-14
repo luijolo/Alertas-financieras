@@ -15,13 +15,14 @@ send_telegram <- function(msg) {
   }
 }
 
-# Función auxiliar para extraer números decimales de un texto
 parse_number_dr <- function(text) {
   clean_text <- gsub("[^0-9.,]", "", text)
-  # Si usa formato 1,081.065928
   clean_text <- gsub(",", "", clean_text)
   as.numeric(clean_text)
 }
+
+# Simular navegador Chrome para evitar bloqueos
+ua <- user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 tryCatch({
   state_file <- "estado_hashes.json"
@@ -35,19 +36,22 @@ tryCatch({
   fecha_hoy <- format(Sys.Date(), "%d/%m/%Y")
 
   # ==========================================
-  # 1. FIDUCIARIA RESERVAS (FOP Multiplaza)
+  # 1. FIDUCIARIA RESERVAS
   # ==========================================
-  url_fiduciaria <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
-  web_fid <- read_html(url_fiduciaria)
+  cat("\n--- 1. PROCESANDO FIDUCIARIA RESERVAS ---\n")
+  url_fid <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
+  res_fid <- GET(url_fid, ua)
+  cat("Status Code:", status_code(res_fid), "\n")
   
-  # Buscar el texto que contiene "Valor patrimonial"
-  node_fid <- html_element(web_fid, xpath = "//*[contains(text(), 'Valor patrimonial') or contains(text(), '1,08')]")
-  
-  if (!is.null(node_fid)) {
-    val_fid_raw <- html_text(node_fid)
-    val_fid <- parse_number_dr(val_fid_raw)
+  if (status_code(res_fid) == 200) {
+    web_fid <- read_html(res_fid)
+    texto_fid <- html_text(web_fid)
     
-    if (!is.na(val_fid)) {
+    val_raw <- str_extract(texto_fid, "1,\\d{3}\\.\\d{4,6}")
+    cat("Valor crudo detectado Fiduciaria:", val_raw, "\n")
+    
+    if (!is.na(val_raw)) {
+      val_fid <- parse_number_dr(val_raw)
       prev_fid <- old_state[["multiplaza_valor"]]
       
       if (!is.null(prev_fid) && val_fid != prev_fid) {
@@ -64,84 +68,93 @@ tryCatch({
   }
 
   # ==========================================
-  # 2. AFI UNIVERSAL (Universal Liquidez)
+  # 2. AFI UNIVERSAL
   # ==========================================
+  cat("\n--- 2. PROCESANDO AFI UNIVERSAL ---\n")
   url_afi <- "https://www.afiuniversal.com.do/universal-liquidez/"
-  web_afi <- read_html(url_afi)
+  res_afi <- GET(url_afi, ua)
+  cat("Status Code:", status_code(res_afi), "\n")
   
-  # Estructura de fondos a monitorear
-  fondos_afi <- list(
-    list(key = "uni_liq", name = "Cuota Universal Liquidez", mult = 57, match = "Liquidez"),
-    list(key = "dep_flex", name = "Cuota Dep. Financiero Flexible", mult = 1, match = "Flexible"),
-    list(key = "plazo_dol", name = "Cuota Plazo mensual dólar", mult = 1, match = "Dólar")
-  )
-
-  texto_pagina_afi <- html_text(web_afi)
-  
-  # Extraer todos los números con formato de cuota (ej: 1,727.399462)
-  numeros_cuotas <- str_extract_all(texto_pagina_afi, "\\b\\d{1,3}(,\\d{3})*\\.\\d{4,6}\\b")[[1]]
-  
-  if (length(numeros_cuotas) >= 3) {
-    valores_detectados <- sapply(numeros_cuotas[1:3], parse_number_dr)
+  if (status_code(res_afi) == 200) {
+    web_afi <- read_html(res_afi)
+    texto_afi <- html_text(web_afi)
     
-    for (idx in seq_along(fondos_afi)) {
-      f <- fondos_afi[[idx]]
-      val_actual <- valores_detectados[idx]
-      prev_val <- old_state[[f$key]]
+    numeros_cuotas <- str_extract_all(texto_afi, "\\b\\d{1,3}(,\\d{3})*\\.\\d{4,6}\\b")[[1]]
+    cat("Cuotas encontradas en AFI:", length(numeros_cuotas), "\n")
+    print(head(numeros_cuotas, 5))
+    
+    fondos_afi <- list(
+      list(key = "uni_liq", name = "Cuota Universal Liquidez", mult = 57),
+      list(key = "dep_flex", name = "Cuota Dep. Financiero Flexible", mult = 1),
+      list(key = "plazo_dol", name = "Cuota Plazo mensual dólar", mult = 1)
+    )
+
+    if (length(numeros_cuotas) >= 3) {
+      valores_detectados <- sapply(numeros_cuotas[1:3], parse_number_dr)
       
-      if (!is.null(prev_val) && val_actual != prev_val) {
-        val_inv <- val_actual * f$mult
-        msg_afi <- paste0(
-          fecha_hoy, "\n",
-          f$name, " ", format(val_actual, nsmall = 6), "\n",
-          "Valor inversion ", format(val_inv, big.mark = ",", nsmall = 2)
-        )
-        send_telegram(msg_afi)
+      for (idx in seq_along(fondos_afi)) {
+        f <- fondos_afi[[idx]]
+        val_actual <- valores_detectados[idx]
+        prev_val <- old_state[[f$key]]
+        
+        if (!is.null(prev_val) && val_actual != prev_val) {
+          val_inv <- val_actual * f$mult
+          msg_afi <- paste0(
+            fecha_hoy, "\n",
+            f$name, " ", format(val_actual, nsmall = 6), "\n",
+            "Valor inversion ", format(val_inv, big.mark = ",", nsmall = 2)
+          )
+          send_telegram(msg_afi)
+        }
+        new_state[[f$key]] <- val_actual
       }
-      new_state[[f$key]] <- val_actual
     }
   }
 
   # ==========================================
-  # 3. CEVALDOM (Mercado OTC)
+  # 3. CEVALDOM (OTC)
   # ==========================================
-  url_cevaldom <- "https://www.cevaldom.com/mercado/otc/"
-  web_cevaldom <- read_html(url_cevaldom)
+  cat("\n--- 3. PROCESANDO CEVALDOM ---\n")
+  url_cev <- "https://www.cevaldom.com/mercado/otc/"
+  res_cev <- GET(url_cev, ua)
+  cat("Status Code:", status_code(res_cev), "\n")
   
-  # Buscar filas de tabla que contengan el ISIN objetivo
-  filas_isin <- html_elements(web_cevaldom, xpath = "//tr[contains(., 'DO9035100120')]")
-  
-  if (length(filas_isin) > 0) {
-    for (fila in filas_isin) {
-      columnas <- html_elements(fila, "td") %>% html_text(trim = TRUE)
-      
-      if (length(columnas) >= 3) {
-        hora_pacto <- columnas[1] # Ajustar índice según la columna de la tabla
-        precio_limpio <- columnas[length(columnas)] # Ajustar según columna de precio
-        
-        trade_id <- paste0("DO9035100120_", hora_pacto, "_", precio_limpio)
-        trades_vistos <- old_state[["otc_trades_vistos"]]
-        if (is.null(trades_vistos)) trades_vistos <- c()
-
-        if (!(trade_id %in% trades_vistos)) {
-          msg_otc <- paste0(
-            "FOP Multiplaza OTC\n",
-            "Hora pacto ", hora_pacto, "\n",
-            "Precio limpio ", precio_limpio
-          )
-          send_telegram(msg_otc)
+  if (status_code(res_cev) == 200) {
+    web_cev <- read_html(res_cev)
+    filas_isin <- html_elements(web_cev, xpath = "//tr[contains(., 'DO9035100120')]")
+    cat("Filas con ISIN encontradas:", length(filas_isin), "\n")
+    
+    if (length(filas_isin) > 0) {
+      for (fila in filas_isin) {
+        columnas <- html_elements(fila, "td") %>% html_text(trim = TRUE)
+        if (length(columnas) >= 3) {
+          hora_pacto <- columnas[1]
+          precio_limpio <- columnas[length(columnas)]
           
-          trades_vistos <- c(trades_vistos, trade_id)
-          new_state[["otc_trades_vistos"]] <- tail(trades_vistos, 50) # Guardar últimos 50
+          trade_id <- paste0("DO9035100120_", hora_pacto, "_", precio_limpio)
+          trades_vistos <- old_state[["otc_trades_vistos"]]
+          if (is.null(trades_vistos)) trades_vistos <- c()
+
+          if (!(trade_id %in% trades_vistos)) {
+            msg_otc <- paste0(
+              "FOP Multiplaza OTC\n",
+              "Hora pacto ", hora_pacto, "\n",
+              "Precio limpio ", precio_limpio
+            )
+            send_telegram(msg_otc)
+            trades_vistos <- c(trades_vistos, trade_id)
+            new_state[["otc_trades_vistos"]] <- tail(trades_vistos, 50)
+          }
         }
       }
     }
   }
 
-  # Guardar estado actualizado
+  # Guardar nuevo estado en estado_hashes.json
   write_json(new_state, state_file, auto_unbox = TRUE, pretty = TRUE)
+  cat("\n--- PROCESO FINALIZADO EXITOSAMENTE ---\n")
 
 }, error = function(e) {
-  send_telegram(paste0("Error en script_fondos.R: ", e$message))
+  send_telegram(paste0("Error en script.R: ", e$message))
   stop(e)
 })
