@@ -157,8 +157,8 @@ tryCatch({
   if (status_code(res_cev_active) == 200) {
     txt_cev <- content(res_cev_active, "text", encoding = "UTF-8")
     
-    if (grepl("DO9035100120", txt_cev)) {
-      cat("¡ISIN DO9035100120 detectado en transacciones OTC de hoy!\n")
+    if (grepl("DO1002223621", txt_cev)) {
+      cat("¡ISIN FOP Multiplaza detectado en transacciones OTC de hoy!\n")
     } else {
       cat("API CEVALDOM activa. No hubo transacciones para el ISIN DO9035100120 hoy.\n")
     }
