@@ -32,6 +32,6 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add estado_fondos.json
+          git add estado_hashes.json
           git commit -m "Update fondos state" || exit 0
           git push
