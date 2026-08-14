@@ -2,7 +2,7 @@ library(httr)
 library(readxl)
 library(digest)
 library(jsonlite)
-
+send_telegram("Prueba exitosa: El bot de Telegram está conectado a GitHub")
 start_time <- Sys.time()
 
 token <- Sys.getenv("TELEGRAM_TOKEN")
