@@ -20,7 +20,7 @@ send_telegram <- function(msg) {
 tryCatch({
   state_file <- "estado_hashes.json"
   
-  # Lectura segura del JSON existente
+  # Lectura segura del estado guardado
   old_hashes <- list()
   if (file.exists(state_file) && file.info(state_file)$size > 2) {
     tryCatch({
@@ -39,27 +39,34 @@ tryCatch({
   for (i in seq_len(nrow(df))) {
     file_name <- df$nombre_archivo[i]
     file_url  <- df$link[i]
-    dest_path <- file.path("temp_downloads", paste0("temp_", i, ".xlsx"))
+    dest_path <- file.path("temp_downloads", paste0("temp_", i))
     
-    # Descargar el archivo
     res <- GET(file_url, write_disk(dest_path, overwrite = TRUE))
     
     if (status_code(res) == 200) {
-      # 1. Detectar el formato real ("xlsx", "xls" o NULL si está corrupto/HTML)
+      current_hash <- NULL
+      
+      # 1. Probar si el archivo es un Excel válido (.xlsx o .xls)
       fmt <- excel_format(dest_path)
       
-      datos_excel <- NULL
       if (!is.null(fmt)) {
         datos_excel <- tryCatch({
           read_excel(dest_path, format = fmt)
-        }, error = function(err) {
-          NULL
-        })
+        }, error = function(err) NULL)
+        
+        if (!is.null(datos_excel)) {
+          current_hash <- digest(datos_excel, algo = "md5")
+        }
+      } else {
+        # 2. Si no es Excel, verificar si es un PDF (los PDF empiezan con %PDF)
+        first_bytes <- tryCatch(readChar(dest_path, nchars = 4), error = function(e) "")
+        if (identical(first_bytes, "%PDF")) {
+          current_hash <- digest(dest_path, algo = "md5", file = TRUE)
+        }
       }
       
-      # 2. Si el archivo se leyó correctamente, calcular hash de los datos
-      if (!is.null(datos_excel)) {
-        current_hash <- digest(datos_excel, algo = "md5")
+      # 3. Comparar con el estado anterior
+      if (!is.null(current_hash)) {
         previous_hash <- old_hashes[[file_name]]
         
         if (!is.null(previous_hash) && current_hash != previous_hash) {
@@ -71,10 +78,8 @@ tryCatch({
     }
   }
   
-  # Guardar estado en JSON
   write_json(new_hashes, state_file, auto_unbox = TRUE, pretty = TRUE)
   
-  # Notificar actualizaciones si las hay
   if (length(archivos_actualizados) > 0) {
     end_time <- Sys.time()
     duration <- round(as.numeric(difftime(end_time, start_time, units = "secs")))
