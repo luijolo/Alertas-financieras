@@ -24,7 +24,7 @@ parse_number_dr <- function(text) {
 }
 
 tryCatch({
-  state_file <- "estado_fondos.json"
+  state_file <- "estado_hashes.json"
   
   old_state <- list()
   if (file.exists(state_file) && file.info(state_file)$size > 2) {
