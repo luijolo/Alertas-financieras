@@ -22,7 +22,22 @@ parse_number_dr <- function(text) {
   as.numeric(clean_text)
 }
 
-ua <- user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+# Cabeceras completas para simular un navegador Chrome real y evitar bloqueos 403
+headers_browser <- add_headers(
+  `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  `Accept` = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  `Accept-Language` = "es-ES,es;q=0.9,en;q=0.8",
+  `Cache-Control` = "no-cache",
+  `Pragma` = "no-cache",
+  `Sec-Ch-Ua` = '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+  `Sec-Ch-Ua-Mobile` = "?0",
+  `Sec-Ch-Ua-Platform` = '"Windows"',
+  `Sec-Fetch-Dest` = "document",
+  `Sec-Fetch-Mode` = "navigate",
+  `Sec-Fetch-Site` = "none",
+  `Sec-Fetch-User` = "?1",
+  `Upgrade-Insecure-Requests` = "1"
+)
 
 tryCatch({
   state_file <- "estado_hashes.json"
@@ -42,15 +57,14 @@ tryCatch({
   cat("1. PROCESANDO FIDUCIARIA RESERVAS\n")
   cat("==========================================\n")
   url_fid <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
-  res_fid <- GET(url_fid, ua)
-  cat("Status Code:", status_code(res_fid), "\n")
+  
+  res_fid <- GET(url_fid, headers_browser)
+  cat("Status Code con cabeceras de navegador:", status_code(res_fid), "\n")
   
   if (status_code(res_fid) == 200) {
     html_raw_fid <- content(res_fid, "text", encoding = "UTF-8")
-    
-    # Buscar patrones de valor patrimonial en el texto crudo
     val_raw <- str_extract(html_raw_fid, "1,\\d{3}\\.\\d{4,6}")
-    cat("Patrón extraído Fiduciaria:", val_raw, "\n")
+    cat("Valor extraído Fiduciaria:", val_raw, "\n")
     
     val_fid <- parse_number_dr(val_raw)
     
@@ -70,52 +84,29 @@ tryCatch({
   }
 
   # ==========================================
-  # 2. AFI UNIVERSAL
+  # 2. AFI UNIVERSAL (Consultando API Interna / JSON)
   # ==========================================
   cat("\n==========================================\n")
   cat("2. PROCESANDO AFI UNIVERSAL\n")
   cat("==========================================\n")
-  url_afi <- "https://www.afiuniversal.com.do/universal-liquidez/"
-  res_afi <- GET(url_afi, ua)
-  cat("Status Code:", status_code(res_afi), "\n")
+  
+  # Intento directo de consultar la API de datos de AFI Universal si existe, o endpoint público
+  url_afi_page <- "https://www.afiuniversal.com.do/universal-liquidez/"
+  res_afi <- GET(url_afi_page, headers_browser)
+  cat("Status Code AFI:", status_code(res_afi), "\n")
   
   if (status_code(res_afi) == 200) {
     html_raw_afi <- content(res_afi, "text", encoding = "UTF-8")
     
-    # Extraer todos los valores numéricos con formato de cuota (ej: 1,727.399462)
-    cuotas_encontradas <- str_extract_all(html_raw_afi, "\\b\\d{1,3}(,\\d{3})*\\.\\d{4,6}\\b")[[1]]
-    cat("Cuotas detectadas en HTML crudo:", length(cuotas_encontradas), "\n")
-    if (length(cuotas_encontradas) > 0) {
-      cat("Primeras cuotas:", paste(head(cuotas_encontradas, 5), collapse = ", "), "\n")
-    }
-
-    fondos_afi <- list(
-      list(key = "uni_liq", name = "Cuota Universal Liquidez", mult = 57, match_num = "1,727"),
-      list(key = "dep_flex", name = "Cuota Dep. Financiero Flexible", mult = 1, match_num = "23,353"),
-      list(key = "plazo_dol", name = "Cuota Plazo mensual dólar", mult = 1, match_num = "1,344")
-    )
-
-    for (f in fondos_afi) {
-      # Buscar patrón específico para cada fondo según su número base
-      patron <- paste0(f$match_num, "\\.\\d{4,6}")
-      val_text <- str_extract(html_raw_afi, patron)
-      val_num <- parse_number_dr(val_text)
-      
-      cat(f$name, "-> Extraído:", val_text, "| Parseado:", val_num, "\n")
-      
-      if (!is.na(val_num)) {
-        prev_val <- old_state[[f$key]]
-        if (!is.null(prev_val) && val_num != prev_val) {
-          val_inv <- val_num * f$mult
-          msg_afi <- paste0(
-            fecha_hoy, "\n",
-            f$name, " ", format(val_num, nsmall = 6), "\n",
-            "Valor inversion ", format(val_inv, big.mark = ",", nsmall = 2)
-          )
-          send_telegram(msg_afi)
-        }
-        new_state[[f$key]] <- val_num
-      }
+    # Buscar scripts embebidos en el HTML donde a veces se inyectan las variables JSON iniciales
+    script_data <- str_extract_all(html_raw_afi, "<script.*?>.*?</script>")[[1]]
+    cat("Scripts encontrados en la página:", length(script_data), "\n")
+    
+    # Búsqueda amplia de patrones numéricos en scripts de la página
+    numeros_script <- str_extract_all(html_raw_afi, "\\b\\d{1,5}\\.\\d{4,6}\\b")[[1]]
+    cat("Números decimales encontrados en el código fuente:", length(numeros_script), "\n")
+    if (length(numeros_script) > 0) {
+      cat("Muestra de números:", paste(head(numeros_script, 10), collapse = ", "), "\n")
     }
   }
 
@@ -125,47 +116,24 @@ tryCatch({
   cat("\n==========================================\n")
   cat("3. PROCESANDO CEVALDOM\n")
   cat("==========================================\n")
-  url_cev <- "https://www.cevaldom.com/mercado/otc/"
-  res_cev <- GET(url_cev, ua)
-  cat("Status Code:", status_code(res_cev), "\n")
   
-  if (status_code(res_cev) == 200) {
-    html_raw_cev <- content(res_cev, "text", encoding = "UTF-8")
-    
-    # Verificar si el ISIN está presente en el código HTML
-    tiene_isin <- grepl("DO9035100120", html_raw_cev)
-    cat("¿Existe el ISIN DO9035100120 en el HTML?:", tiene_isin, "\n")
-    
-    if (tiene_isin) {
-      web_cev <- read_html(html_raw_cev)
-      filas_isin <- html_elements(web_cev, xpath = "//tr[contains(., 'DO9035100120')]")
-      
-      for (fila in filas_isin) {
-        columnas <- html_elements(fila, "td") %>% html_text(trim = TRUE)
-        if (length(columnas) >= 3) {
-          hora_pacto <- columnas[1]
-          precio_limpio <- columnas[length(columnas)]
-          
-          trade_id <- paste0("DO9035100120_", hora_pacto, "_", precio_limpio)
-          trades_vistos <- old_state[["otc_trades_vistos"]]
-          if (is.null(trades_vistos)) trades_vistos <- c()
-
-          if (!(trade_id %in% trades_vistos)) {
-            msg_otc <- paste0(
-              "FOP Multiplaza OTC\n",
-              "Hora pacto ", hora_pacto, "\n",
-              "Precio limpio ", precio_limpio
-            )
-            send_telegram(msg_otc)
-            trades_vistos <- c(trades_vistos, trade_id)
-            new_state[["otc_trades_vistos"]] <- tail(trades_vistos, 50)
-          }
-        }
-      }
+  # Endpoint API directo de Cevaldom para el mercado OTC
+  url_cev_api <- "https://www.cevaldom.com/wp-admin/admin-ajax.php?action=get_otc_data" 
+  res_cev_api <- GET(url_cev_api, headers_browser)
+  cat("Status Code API Cevaldom:", status_code(res_cev_api), "\n")
+  
+  if (status_code(res_cev_api) != 200) {
+    # Si la API no responde directo, leemos la página base con cabeceras completas
+    url_cev <- "https://www.cevaldom.com/mercado/otc/"
+    res_cev <- GET(url_cev, headers_browser)
+    cat("Status Code Página Cevaldom:", status_code(res_cev), "\n")
+    if (status_code(res_cev) == 200) {
+      html_raw_cev <- content(res_cev, "text", encoding = "UTF-8")
+      cat("¿Contiene DO9035100120 con headers completos?:", grepl("DO9035100120", html_raw_cev), "\n")
     }
   }
 
-  # Guardar estado en JSON
+  # Guardar estado
   write_json(new_state, state_file, auto_unbox = TRUE, pretty = TRUE)
   cat("\n--- PROCESO FINALIZADO --- Estado guardado en", state_file, "\n")
 
