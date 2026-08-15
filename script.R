@@ -58,7 +58,6 @@ tryCatch({
     
     if (!is.na(val_fid)) {
       prev_fid <- old_state[["multiplaza_valor"]]
-      # Notificar solo si cambio el valor o es la primera ejecucion
       if (is.null(prev_fid) || val_fid != prev_fid) {
         inv_fid <- val_fid * 20
         msg_fid <- paste0(
@@ -67,16 +66,16 @@ tryCatch({
           "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
         )
         send_telegram(msg_fid)
-        cat("Notificación Telegram enviada para Fiduciaria Reservas.\n")
+        cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
       } else {
-        cat("Sin cambios en Fiduciaria Reservas. No se envía mensaje.\n")
+        cat("Sin cambios en Fiduciaria Reservas.\n")
       }
       new_state[["multiplaza_valor"]] <- val_fid
     }
   }
 
   # ==========================================
-  # 2. AFI UNIVERSAL (Extracción exacta del campo 'valor')
+  # 2. AFI UNIVERSAL
   # ==========================================
   cat("\n==========================================\n")
   cat("2. PROCESANDO AFI UNIVERSAL\n")
@@ -91,7 +90,6 @@ tryCatch({
   for (f in fondos_afi) {
     url_afi_code <- paste0("https://www.afiuniversal.com.do/funds/QuotaValues/", f$code)
     res_afi <- GET(url_afi_code, headers_browser)
-    cat("\n--- Fondo:", f$name, "(", f$code, ") ---\n")
     
     if (status_code(res_afi) == 200) {
       txt_afi <- content(res_afi, "text", encoding = "UTF-8")
@@ -100,17 +98,14 @@ tryCatch({
       val_num <- NA
       
       if (!is.null(json_parsed)) {
-        # Si es un data.frame o lista con propiedades, buscar la columna 'valor'
         col_names <- tolower(names(json_parsed))
         pos_valor <- match(TRUE, col_names %in% c("valor", "valorcuota", "value"))
         
         if (!is.na(pos_valor)) {
           campo_exacto <- names(json_parsed)[pos_valor]
           vector_valores <- json_parsed[[campo_exacto]]
-          # Tomar el último valor disponible del arreglo
           val_raw <- tail(vector_valores, 1)
           val_num <- parse_number_dr(val_raw)
-          cat("Campo '", campo_exacto, "' encontrado. Valor extraído:", val_num, "\n")
         } else if (is.numeric(json_parsed)) {
           val_num <- json_parsed[1]
         }
@@ -119,7 +114,6 @@ tryCatch({
       if (!is.na(val_num)) {
         prev_val <- old_state[[f$key]]
         
-        # Comparar con el valor registrado previamente
         if (is.null(prev_val) || val_num != prev_val) {
           val_inv <- val_num * f$mult
           simbolo <- if (f$code == "DOLR") "US$" else "RD$"
@@ -130,19 +124,17 @@ tryCatch({
             "Valor inversion ", simbolo, format(val_inv, big.mark = ",", nsmall = 2)
           )
           send_telegram(msg_afi)
-          cat("Notificación enviada a Telegram para", f$name, "\n")
+          cat("Notificación enviada para", f$name, ":", val_num, "\n")
         } else {
-          cat("El valor de", f$name, "no ha cambiado (", val_num, "). No se envía mensaje.\n")
+          cat("Sin cambios para", f$name, "\n")
         }
         new_state[[f$key]] <- val_num
-      } else {
-        cat("No se pudo extraer el campo 'valor' de la respuesta JSON.\n")
       }
     }
   }
 
   # ==========================================
-  # 3. CEVALDOM (API de Precios)
+  # 3. CEVALDOM (API de Precios OTC)
   # ==========================================
   cat("\n==========================================\n")
   cat("3. PROCESANDO CEVALDOM API\n")
@@ -157,14 +149,70 @@ tryCatch({
   if (status_code(res_cev_active) == 200) {
     txt_cev <- content(res_cev_active, "text", encoding = "UTF-8")
     
-    if (grepl("DO1002223621", txt_cev)) {
-      cat("¡ISIN FOP Multiplaza detectado en transacciones OTC de hoy!\n")
+    isin_objetivo <- "DO9035100120"
+    trades_vistos <- old_state[["otc_trades_vistos"]]
+    if (is.null(trades_vistos)) trades_vistos <- c()
+    
+    if (grepl(isin_objetivo, txt_cev)) {
+      cat("¡ISIN", isin_objetivo, "detectado en la API de CEVALDOM!\n")
+      
+      json_cev <- tryCatch({ fromJSON(txt_cev) }, error = function(e) NULL)
+      
+      if (!is.null(json_cev)) {
+        df_cev <- as.data.frame(json_cev)
+        
+        # Buscar filas que tengan el ISIN objetivo
+        filas_coincidentes <- which(apply(df_cev, 1, function(row) any(grepl(isin_objetivo, row, ignore.case = TRUE))))
+        
+        if (length(filas_coincidentes) > 0) {
+          for (idx in filas_coincidentes) {
+            fila <- df_cev[idx, ]
+            row_str <- paste(unname(unlist(fila)), collapse = "_")
+            
+            # Crear un identificador único para la transacción
+            trade_id <- paste0(isin_objetivo, "_", gsub("[^a-zA-Z0-9_]", "", row_str))
+            
+            if (!(trade_id %in% trades_vistos)) {
+              # Extraer campos si existen
+              precio_limpio <- if (!is.null(fila$precioLimpio)) fila$precioLimpio else if (!is.null(fila$precio)) fila$precio else "Consultar"
+              hora_pacto <- if (!is.null(fila$horaPacto)) fila$horaPacto else if (!is.null(fila$hora)) fila$hora else fecha_hoy
+              
+              msg_otc <- paste0(
+                "FOP Multiplaza OTC (CEVALDOM)\n",
+                "ISIN: ", isin_objetivo, "\n",
+                "Hora pacto: ", hora_pacto, "\n",
+                "Precio limpio: ", precio_limpio
+              )
+              send_telegram(msg_otc)
+              cat("Notificación enviada a Telegram para CEVALDOM.\n")
+              trades_vistos <- c(trades_vistos, trade_id)
+            } else {
+              cat("La transacción OTC ya fue notificada previamente.\n")
+            }
+          }
+        }
+      } else {
+        # Respaldo en caso de que el JSON tenga un formato distinto
+        trade_id <- paste0(isin_objetivo, "_", fecha_hoy)
+        if (!(trade_id %in% trades_vistos)) {
+          msg_otc <- paste0(
+            "FOP Multiplaza OTC (CEVALDOM)\n",
+            "Actividad detectada para el ISIN ", isin_objetivo, " el ", fecha_hoy
+          )
+          send_telegram(msg_otc)
+          cat("Notificación enviada a Telegram para CEVALDOM (Modo Respaldo).\n")
+          trades_vistos <- c(trades_vistos, trade_id)
+        }
+      }
+      
+      # Mantiene un historial de los últimos 50 trades vistos
+      new_state[["otc_trades_vistos"]] <- tail(trades_vistos, 50)
     } else {
-      cat("API CEVALDOM activa. No hubo transacciones para el ISIN DO9035100120 hoy.\n")
+      cat("No se encontraron transacciones hoy para el ISIN", isin_objetivo, "\n")
     }
   }
 
-  # Guardar estado actualizado en el JSON
+  # Guardar estado persistente en el archivo JSON
   write_json(new_state, state_file, auto_unbox = TRUE, pretty = TRUE)
   cat("\n--- PROCESO FINALIZADO --- Estado guardado en", state_file, "\n")
 
