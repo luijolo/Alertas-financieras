@@ -82,7 +82,7 @@ tryCatch({
   cat("==========================================\n")
 
   fondos_afi <- list(
-    list(code = "LIQUID", key = "uni_liq", name = "Cuota Universal Liquidez", mult = 57),
+    list(code = "LIQUID", key = "uni_liq", name = "Cuota Universal Liquidez", mult = 58.291955),
     list(code = "FLEX", key = "dep_flex", name = "Cuota Dep. Financiero Flexible", mult = 1),
     list(code = "DOLR", key = "plazo_dol", name = "Cuota Plazo mensual dólar", mult = 1)
   )
