@@ -53,45 +53,66 @@ tryCatch({
   # ==========================================
   # 1. FIDUCIARIA RESERVAS
   # ==========================================
- url_bvrd_json <- "https://data.bvrd.com.do/emisores_renta_variable.json"
+cat("\n==========================================\n")
+cat("1. PROCESANDO FIDUCIARIA RESERVAS (BVRD JSON)\n")
+cat("==========================================\n")
+
+url_bvrd_json <- "https://data.bvrd.com.do/emisores_renta_variable.json"
 
 res_bvrd <- tryCatch(GET(url_bvrd_json, headers_json), error = function(e) NULL)
 
+val_fid <- NA
+
 if (!is.null(res_bvrd) && status_code(res_bvrd) == 200) {
   txt_bvrd <- content(res_bvrd, "text", encoding = "UTF-8")
-  json_bvrd <- tryCatch({ fromJSON(txt_bvrd) }, error = function(e) NULL)
   
-  val_fid <- NA
+  # Estrategia 1: Parseo de JSON con simplificación
+  json_parsed <- tryCatch({ fromJSON(txt_bvrd, simplifyDataFrame = TRUE) }, error = function(e) NULL)
   
-  if (!is.null(json_bvrd)) {
-    df_bvrd <- as.data.frame(json_bvrd)
+  # Extraer data frame si viene dentro de un objeto con claves
+  if (is.list(json_parsed) && !is.data.frame(json_parsed)) {
+    for (item in json_parsed) {
+      if (is.data.frame(item)) { json_parsed <- item; break }
+    }
+  }
+  
+  if (is.data.frame(json_parsed)) {
+    match_mask <- apply(json_parsed, 1, function(row) {
+      any(grepl("DO9035100120|Multiplaza|FR-N02|FR No. 02", as.character(unlist(row)), ignore.case = TRUE))
+    })
     
-    # Buscar la fila que corresponda al Fideicomiso Multiplaza
-    idx_target <- which(apply(df_bvrd, 1, function(row) {
-      any(grepl("Multiplaza|DO9035100120|FR No. 02|FR-N02", row, ignore.case = TRUE))
-    }))
-    
-    if (length(idx_target) > 0) {
-      fila_target <- df_bvrd[idx_target[1], ]
-      
-      # Extraer el campo 'nav' directo del JSON
-      if (!is.null(fila_target$nav)) {
-        val_fid <- parse_number_dr(fila_target$nav)
-      } else {
-        col_nav <- names(fila_target)[tolower(names(fila_target)) == "nav"]
-        if (length(col_nav) > 0) {
-          val_fid <- parse_number_dr(fila_target[[col_nav[1]]])
-        }
+    if (any(match_mask)) {
+      target_row <- json_parsed[which(match_mask)[1], ]
+      nav_col <- names(target_row)[tolower(names(target_row)) == "nav"]
+      if (length(nav_col) > 0) {
+        val_fid <- parse_number_dr(target_row[[nav_col[1]]])
       }
     }
   }
   
-  cat("Valor cuota (NAV) detectado:", val_fid, "\n")
+  # Estrategia 2: Regex directo sobre el string JSON si la estructura del objeto falla
+  if (is.na(val_fid)) {
+    # Extrae el valor de "nav" asociado al ISIN o nombre
+    pattern_nav <- '(?i)(?:DO9035100120|Multiplaza)[^}]*?"nav"\\s*:\\s*"?([0-9]+\\.[0-9]+)"?'
+    match_nav <- str_match(txt_bvrd, pattern_nav)
+    
+    if (!is.na(match_nav[1, 2])) {
+      val_fid <- as.numeric(match_nav[1, 2])
+    } else {
+      # Búsqueda inversa ("nav" antes del identificador)
+      pattern_rev <- '(?i)"nav"\\s*:\\s*"?([0-9]+\\.[0-9]+)"?[^}]*?(?:DO9035100120|Multiplaza)'
+      match_nav_rev <- str_match(txt_bvrd, pattern_rev)
+      if (!is.na(match_nav_rev[1, 2])) {
+        val_fid <- as.numeric(match_nav_rev[1, 2])
+      }
+    }
+  }
+  
+  cat("Valor NAV detectado:", val_fid, "\n")
   
   if (!is.na(val_fid)) {
     prev_fid <- old_state[["multiplaza_valor"]]
     
-    # Notificar si cambió o si es la primera ejecución
     if (is.null(prev_fid) || val_fid != prev_fid) {
       inv_fid <- val_fid * 20
       msg_fid <- paste0(
@@ -106,10 +127,11 @@ if (!is.null(res_bvrd) && status_code(res_bvrd) == 200) {
     }
     new_state[["multiplaza_valor"]] <- val_fid
   } else {
-    cat("ADVERTENCIA: No se encontró el registro o la propiedad 'nav' para Multiplaza.\n")
+    cat("ADVERTENCIA: No se pudo extraer 'nav'. Muestra de respuesta de BVRD:\n")
+    cat(substr(txt_bvrd, 1, 300), "\n")
   }
 } else {
-  cat("ADVERTENCIA: No se pudo obtener respuesta del endpoint JSON de BVRD.\n")
+  cat("ADVERTENCIA: Falló la petición HTTP a BVRD.\n")
 }
 
   # ==========================================
