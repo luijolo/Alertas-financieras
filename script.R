@@ -22,7 +22,15 @@ parse_number_dr <- function(text) {
   as.numeric(clean_text)
 }
 
-headers_browser <- add_headers(
+# Cabeceras específicas para navegadores / páginas HTML
+headers_html <- add_headers(
+  `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  `Accept` = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  `Accept-Language` = "es-ES,es;q=0.9,en;q=0.8"
+)
+
+# Cabeceras específicas para consumo de APIs JSON
+headers_json <- add_headers(
   `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
   `Accept` = "application/json, text/plain, */*",
   `Accept-Language` = "es-ES,es;q=0.9,en;q=0.8"
@@ -42,86 +50,70 @@ tryCatch({
   # Registra la fecha/hora actual para forzar cambio en Git en cada corrida
   new_state[["ultima_ejecucion"]] <- format(Sys.time(), "%Y-%m-%d %H:%M:%S AST")
 
-# ==========================================
-# 1. FIDUCIARIA RESERVAS
-# ==========================================
-cat("\n==========================================\n")
-cat("1. PROCESANDO FIDUCIARIA RESERVAS\n")
-cat("==========================================\n")
+  # ==========================================
+  # 1. FIDUCIARIA RESERVAS
+  # ==========================================
+  cat("\n==========================================\n")
+  cat("1. PROCESANDO FIDUCIARIA RESERVAS\n")
+  cat("==========================================\n")
 
-url_fid <- paste0(
-  "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/",
-  "?nocache=", as.numeric(Sys.time())
-)
-
-res_fid <- tryCatch(GET(url_fid, headers_browser), error = function(e) NULL)
-
-if (!is.null(res_fid) && status_code(res_fid) == 200) {
-  html_obj <- read_html(res_fid)
-  val_raw <- NA
-  
-  # Estrategia 1: XPath exacto a la fila (<tr>) cuya primera celda es EXACTAMENTE la etiqueta deseada
-  nodo_valor <- html_node(
-    html_obj, 
-    xpath = "//tr[td[1][normalize-space()='Valor patrimonial de los valores']]/td[2]"
+  url_fid <- paste0(
+    "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/",
+    "?nocache=", as.numeric(Sys.time())
   )
-  
-  if (!is.null(nodo_valor) && !is.na(nodo_valor)) {
-    val_raw <- html_text(nodo_valor, trim = TRUE)
-  }
-  
-  # Estrategia 2 (Respaldo 1): Búsqueda flexibilizada dentro de celdas <td>
-  if (is.na(val_raw) || nchar(val_raw) == 0) {
-    nodo_valor <- html_node(
-      html_obj, 
-      xpath = "//td[contains(normalize-space(), 'Valor patrimonial de los valores') and not(contains(., 'día anterior'))]/following-sibling::td[1]"
-    )
-    if (!is.null(nodo_valor) && !is.na(nodo_valor)) {
-      val_raw <- html_text(nodo_valor, trim = TRUE)
-    }
-  }
-  
-  # Estrategia 3 (Respaldo 2): Regex directo sobre el texto completo
-  if (is.na(val_raw) || nchar(val_raw) == 0) {
-    texto_pagina <- html_text2(html_obj)
-    val_raw <- str_extract(
-      texto_pagina, 
-      "(?i)Valor patrimonial de los valores(?![^\n]*día anterior)[^\n0-9]*([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+)"
-    )
-  }
-  
-  # Limpieza y extracción de la cifra decimal
-  if (!is.na(val_raw)) {
-    val_clean <- str_extract(val_raw, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
-    val_fid <- parse_number_dr(val_clean)
-  } else {
-    val_fid <- NA
-  }
-  
-  cat("Valor bruto detectado :", val_raw, "\n")
-  cat("Valor cuota Fiduciaria:", val_fid, "\n")
-  
-  if (!is.na(val_fid)) {
-    prev_fid <- old_state[["multiplaza_valor"]]
+
+  res_fid <- tryCatch(GET(url_fid, headers_html), error = function(e) NULL)
+
+  if (!is.null(res_fid) && status_code(res_fid) == 200) {
+    html_obj <- read_html(res_fid)
     
-    # Notificar si cambió o si es la primera ejecución
-    if (is.null(prev_fid) || val_fid != prev_fid) {
-      inv_fid <- val_fid * 20
-      msg_fid <- paste0(
-        fecha_hoy, "\n",
-        "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
-        "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
-      )
-      send_telegram(msg_fid)
-      cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
+    # 1. Extraer todo el texto de la página y convertir saltos de línea/espacios en espacios simples
+    texto_pagina <- html_text2(html_obj)
+    if (nchar(texto_pagina) < 50) texto_pagina <- html_text(html_obj)
+    
+    texto_flat <- gsub("\\s+", " ", texto_pagina)
+    
+    # 2. Eliminar primero el bloque del "día anterior" para evitar falsos positivos de valores pasados
+    texto_sin_anterior <- gsub(
+      "(?i)Valor patrimonial de los valores\\s*(?:del\\s*)?día\\s*anterior[^0-9]*[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+", 
+      "", 
+      texto_flat
+    )
+    
+    # 3. Capturar el texto desde "Valor patrimonial de los valores" hasta la cifra actual
+    match_str <- str_extract(
+      texto_sin_anterior, 
+      "(?i)Valor patrimonial de los valores[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+)"
+    )
+    
+    # 4. Aislar la cifra decimal y convertir a entero/numérico
+    val_clean <- if (!is.na(match_str)) str_extract(match_str, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+") else NA
+    val_fid <- parse_number_dr(val_clean)
+    
+    cat("Texto coincidente extraído:", match_str, "\n")
+    cat("Valor cuota Fiduciaria   :", val_fid, "\n")
+    
+    if (!is.na(val_fid)) {
+      prev_fid <- old_state[["multiplaza_valor"]]
+      
+      if (is.null(prev_fid) || val_fid != prev_fid) {
+        inv_fid <- val_fid * 20
+        msg_fid <- paste0(
+          fecha_hoy, "\n",
+          "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
+          "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
+        )
+        send_telegram(msg_fid)
+        cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
+      } else {
+        cat("Sin cambios en Fiduciaria Reservas.\n")
+      }
+      new_state[["multiplaza_valor"]] <- val_fid
     } else {
-      cat("Sin cambios en Fiduciaria Reservas.\n")
+      cat("ADVERTENCIA: No se pudo extraer el valor en Fiduciaria Reservas.\n")
     }
-    new_state[["multiplaza_valor"]] <- val_fid
-  } else {
-    cat("ADVERTENCIA: No se pudo extraer el valor. Verifique la estructura del sitio.\n")
   }
-}
+
   # ==========================================
   # 2. AFI UNIVERSAL
   # ==========================================
@@ -137,7 +129,7 @@ if (!is.null(res_fid) && status_code(res_fid) == 200) {
 
   for (f in fondos_afi) {
     url_afi_code <- paste0("https://www.afiuniversal.com.do/funds/QuotaValues/", f$code)
-    res_afi <- tryCatch(GET(url_afi_code, headers_browser), error = function(e) NULL)
+    res_afi <- tryCatch(GET(url_afi_code, headers_json), error = function(e) NULL)
     
     if (!is.null(res_afi) && status_code(res_afi) == 200) {
       txt_afi <- content(res_afi, "text", encoding = "UTF-8")
@@ -187,14 +179,14 @@ if (!is.null(res_fid) && status_code(res_fid) == 200) {
   cat("\n==========================================\n")
   cat("3. PROCESANDO CEVALDOM API\n")
   cat("==========================================\n")
-  
+
   url_cev_api <- "https://www.cevaldom.com/api/cevaldom/fetch-prices"
-  
-  res_cev_get <- tryCatch(GET(url_cev_api, headers_browser), error = function(e) NULL)
-  res_cev_post <- tryCatch(POST(url_cev_api, headers_browser), error = function(e) NULL)
-  
+
+  res_cev_get <- tryCatch(GET(url_cev_api, headers_json), error = function(e) NULL)
+  res_cev_post <- tryCatch(POST(url_cev_api, headers_json), error = function(e) NULL)
+
   res_cev_active <- if (!is.null(res_cev_get) && status_code(res_cev_get) == 200) res_cev_get else res_cev_post
-  
+
   if (!is.null(res_cev_active) && status_code(res_cev_active) == 200) {
     txt_cev <- content(res_cev_active, "text", encoding = "UTF-8")
     
