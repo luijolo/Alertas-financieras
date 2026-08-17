@@ -57,71 +57,90 @@ cat("\n==========================================\n")
 cat("1. PROCESANDO FIDUCIARIA RESERVAS (Multiplaza FR No. 02)\n")
 cat("==========================================\n")
 
+# URL Oficial del Fideicomiso Multiplaza
+url_fid_reservas <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
+
 # Encabezados de navegador real
 headers_browser <- add_headers(
-  `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-  `Accept` = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  `Accept` = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   `Accept-Language` = "es-ES,es;q=0.9,en;q=0.8"
 )
 
-opt_ssl <- config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
-
-# Fuente Principal: Portal Oficial de Fiduciaria Reservas
-url_fid_reservas <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
-# Fuente Secundaria: BVRD API
-url_bvrd_json <- "https://data.bvrd.com.do/emisores_renta_variable.json"
+opt_ssl <- config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE, followlocation = TRUE)
 
 val_fid <- NA
+txt_fid <- ""
 
-# --- FUENTE 1: FIDUCIARIA RESERVAS (Página Oficial) ---
-cat("Intentando obtener NAV desde Fiduciaria Reservas...\n")
+# Intento 1: Petición HTTR con redirección explícita
 res_fid <- tryCatch({
-  GET(url_fid_reservas, headers_browser, opt_ssl, timeout(15))
+  GET(url_fid_reservas, headers_browser, opt_ssl, timeout(20))
 }, error = function(e) {
-  cat("Error de conexión httr:", conditionMessage(e), "\n")
+  cat("Error en httr GET:", conditionMessage(e), "\n")
   return(NULL)
 })
 
-txt_fid <- ""
 if (!is.null(res_fid) && status_code(res_fid) == 200) {
   txt_fid <- content(res_fid, "text", encoding = "UTF-8")
-} else {
-  # Respaldo con curl nativo de Linux si httr falla
+}
+
+# Intento 2: Respaldar con curl nativo de Linux (con opción -L para seguir redirecciones)
+if (nchar(txt_fid) < 500) {
+  cat("Petición HTTR insuficiente. Ejecutando curl nativo con redirección...\n")
   tmp_fid <- tempfile()
-  cmd_curl <- sprintf('curl -s -k -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "%s" -o "%s"', url_fid_reservas, tmp_fid)
+  cmd_curl <- sprintf('curl -s -k -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "%s" -o "%s"', url_fid_reservas, tmp_fid)
   system(cmd_curl)
-  if (file.exists(tmp_fid) && file.info(tmp_fid)$size > 100) {
+  if (file.exists(tmp_fid) && file.info(tmp_fid)$size > 500) {
     txt_fid <- paste(readLines(tmp_fid, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
   }
 }
 
-if (nchar(txt_fid) > 100) {
-  # Extrae el valor listado junto a "Valor patrimonial de los valores"
-  pattern_fid <- '(?i)Valor\\s+patrimonial\\s+de\\s+los\\s+valores(?!\\s+del\\s+d[íi]a\\s+anterior)[^RD]*?RD\\$\\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\\.[0-9]+)?)'
-  match_fid <- str_match(txt_fid, pattern_fid)
+if (nchar(txt_fid) > 500) {
   
-  if (!is.na(match_fid[1, 2])) {
-    val_fid <- parse_number_dr(match_fid[1, 2])
-    cat("NAV capturado exitosamente desde Fiduciaria Reservas:", val_fid, "\n")
-  }
-}
-
-# --- FUENTE 2: BVRD JSON (Respaldo secundario) ---
-if (is.na(val_fid)) {
-  cat("Intentando respaldo desde BVRD JSON...\n")
-  res_bvrd <- tryCatch({
-    GET(url_bvrd_json, headers_browser, opt_ssl, timeout(15))
-  }, error = function(e) NULL)
-  
-  if (!is.null(res_bvrd) && status_code(res_bvrd) == 200) {
-    txt_bvrd <- content(res_bvrd, "text", encoding = "UTF-8")
-    pattern_nav <- '(?i)(?:DO9035100120|Multiplaza)[^}]*?"nav"\\s*:\\s*"?([0-9]+\\.[0-9]+)"?'
-    match_nav <- str_match(txt_bvrd, pattern_nav)
-    if (!is.na(match_nav[1, 2])) {
-      val_fid <- as.numeric(match_nav[1, 2])
-      cat("NAV capturado desde BVRD JSON:", val_fid, "\n")
+  # --- MÉTODO A: Lectura estructurada de tablas HTML (rvest) ---
+  doc <- tryCatch(read_html(txt_fid), error = function(e) NULL)
+  if (!is.null(doc)) {
+    tbls <- tryCatch(html_table(doc, fill = TRUE), error = function(e) NULL)
+    if (is.list(tbls)) {
+      for (tbl in tbls) {
+        df_tbl <- as.data.frame(tbl)
+        for (r in 1:nrow(df_tbl)) {
+          row_txt <- paste(df_tbl[r, ], collapse = " ")
+          if (grepl("Valor patrimonial de los valores", row_txt, ignore.case = TRUE) &&
+              !grepl("día anterior|dia anterior", row_txt, ignore.case = TRUE)) {
+            m <- str_match(row_txt, "(?:RD\\$|RD)?\\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\\.[0-9]+)?)")
+            if (!is.na(m[1, 2])) {
+              val_fid <- parse_number_dr(m[1, 2])
+              if (!is.na(val_fid)) {
+                cat("NAV extraído vía rvest (Tabla HTML):", val_fid, "\n")
+                break
+              }
+            }
+          }
+        }
+        if (!is.na(val_fid)) break
+      }
     }
   }
+  
+  # --- MÉTODO B: Regex sobre Texto Plano (Sin etiquetas HTML) ---
+  if (is.na(val_fid)) {
+    cat("Buscando mediante limpieza de etiquetas HTML...\n")
+    # Remover todas las etiquetas HTML y normalizar espacios
+    txt_clean <- gsub("<[^>]+>", " ", txt_fid)
+    txt_clean <- gsub("\\s+", " ", txt_clean)
+    
+    # Expresión Regular para capturar el valor exacto tras la frase
+    pattern_fid <- '(?i)Valor\\s+patrimonial\\s+de\\s+los\\s+valores\\s+(?:RD\\$|RD)?\\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\\.[0-9]+)?)'
+    match_fid <- str_match(txt_clean, pattern_fid)
+    
+    if (!is.na(match_fid[1, 2])) {
+      val_fid <- parse_number_dr(match_fid[1, 2])
+      cat("NAV extraído vía Regex sobre texto limpio:", val_fid, "\n")
+    }
+  }
+} else {
+  cat("ADVERTENCIA: No se pudo descargar la página de Fiduciaria Reservas (contenido vacio).\n")
 }
 
 cat("Valor NAV detectado final:", val_fid, "\n")
@@ -129,7 +148,6 @@ cat("Valor NAV detectado final:", val_fid, "\n")
 if (!is.na(val_fid)) {
   prev_fid <- old_state[["multiplaza_valor"]]
   
-  # Si es la primera corrida o si hubo un cambio de valor
   if (is.null(prev_fid) || val_fid != prev_fid) {
     inv_fid <- val_fid * 20
     msg_fid <- paste0(
@@ -144,7 +162,11 @@ if (!is.na(val_fid)) {
   }
   new_state[["multiplaza_valor"]] <- val_fid
 } else {
-  cat("ADVERTENCIA: No se pudo extraer el NAV de ninguna de las fuentes.\n")
+  cat("ADVERTENCIA: No se pudo extraer el NAV de Fiduciaria Reservas.\n")
+  if (nchar(txt_fid) > 0) {
+    cat("Muestra del HTML recibido (primeros 300 caracteres):\n")
+    cat(substr(txt_fid, 1, 300), "\n")
+  }
 }
   # ==========================================
   # 2. AFI UNIVERSAL
