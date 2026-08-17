@@ -51,96 +51,96 @@ tryCatch({
   new_state[["ultima_ejecucion"]] <- format(Sys.time(), "%Y-%m-%d %H:%M:%S AST")
 
   # ==========================================
-  # 1. FIDUCIARIA RESERVAS
-  # ==========================================
+# 1. FIDUCIARIA RESERVAS (Multiplaza FR No. 02) vía JMMB API
+# ==========================================
 cat("\n==========================================\n")
-cat("1. PROCESANDO FIDUCIARIA RESERVAS (Multiplaza FR No. 02)\n")
+cat("1. PROCESANDO FIDUCIARIA RESERVAS (JMMB API)\n")
 cat("==========================================\n")
 
-# URL Oficial del Fideicomiso Multiplaza
-url_fid_reservas <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
+# URL directa de la API de precios de JMMB
+url_jmmb_json <- "https://api.jmmb.com.do/api/fondos/historico"
 
-# Encabezados de navegador real
-headers_browser <- add_headers(
-  `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  `Accept` = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  `Accept-Language` = "es-ES,es;q=0.9,en;q=0.8"
+# Encabezados básicos para el JSON
+headers_jmmb <- add_headers(
+  `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  `Accept` = "application/json"
 )
 
-opt_ssl <- config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE, followlocation = TRUE)
-
 val_fid <- NA
-txt_fid <- ""
 
-# Intento 1: Petición HTTR con redirección explícita
-res_fid <- tryCatch({
-  GET(url_fid_reservas, headers_browser, opt_ssl, timeout(20))
+# Realizar la petición a JMMB
+res_jmmb <- tryCatch({
+  GET(url_jmmb_json, headers_jmmb, timeout(15))
 }, error = function(e) {
-  cat("Error en httr GET:", conditionMessage(e), "\n")
+  cat("Error en httr GET a JMMB:", conditionMessage(e), "\n")
   return(NULL)
 })
 
-if (!is.null(res_fid) && status_code(res_fid) == 200) {
-  txt_fid <- content(res_fid, "text", encoding = "UTF-8")
-}
-
-# Intento 2: Respaldar con curl nativo de Linux (con opción -L para seguir redirecciones)
-if (nchar(txt_fid) < 500) {
-  cat("Petición HTTR insuficiente. Ejecutando curl nativo con redirección...\n")
-  tmp_fid <- tempfile()
-  cmd_curl <- sprintf('curl -s -k -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "%s" -o "%s"', url_fid_reservas, tmp_fid)
-  system(cmd_curl)
-  if (file.exists(tmp_fid) && file.info(tmp_fid)$size > 500) {
-    txt_fid <- paste(readLines(tmp_fid, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
-  }
-}
-
-if (nchar(txt_fid) > 500) {
+# Procesar la respuesta
+if (!is.null(res_jmmb) && status_code(res_jmmb) == 200) {
+  txt_jmmb <- content(res_jmmb, "text", encoding = "UTF-8")
   
-  # --- MÉTODO A: Lectura estructurada de tablas HTML (rvest) ---
-  doc <- tryCatch(read_html(txt_fid), error = function(e) NULL)
-  if (!is.null(doc)) {
-    tbls <- tryCatch(html_table(doc, fill = TRUE), error = function(e) NULL)
-    if (is.list(tbls)) {
-      for (tbl in tbls) {
-        df_tbl <- as.data.frame(tbl)
-        for (r in 1:nrow(df_tbl)) {
-          row_txt <- paste(df_tbl[r, ], collapse = " ")
-          if (grepl("Valor patrimonial de los valores", row_txt, ignore.case = TRUE) &&
-              !grepl("día anterior|dia anterior", row_txt, ignore.case = TRUE)) {
-            m <- str_match(row_txt, "(?:RD\\$|RD)?\\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\\.[0-9]+)?)")
-            if (!is.na(m[1, 2])) {
-              val_fid <- parse_number_dr(m[1, 2])
-              if (!is.na(val_fid)) {
-                cat("NAV extraído vía rvest (Tabla HTML):", val_fid, "\n")
-                break
-              }
-            }
+  # Parsear el JSON de JMMB
+  json_jmmb <- tryCatch({ fromJSON(txt_jmmb, simplifyDataFrame = TRUE) }, error = function(e) NULL)
+  
+  # Extraer la estructura de datos (puede venir en json_jmmb$data)
+  df_jmmb <- NULL
+  if (is.data.frame(json_jmmb)) {
+    df_jmmb <- json_jmmb
+  } else if (is.list(json_jmmb) && "data" %in% names(json_jmmb)) {
+    df_jmmb <- as.data.frame(json_jmmb$data)
+  }
+  
+  # Buscar el Fideicomiso Multiplaza dentro de la tabla de precios
+  if (!is.null(df_jmmb) && nrow(df_jmmb) > 0) {
+    match_mask <- apply(df_jmmb, 1, function(row) {
+      any(grepl("DO9035100120|Multiplaza|FR No. 02", as.character(row), ignore.case = TRUE))
+    })
+    
+    if (any(match_mask)) {
+      target_row <- df_jmmb[which(match_mask)[1], ]
+      
+      # Buscar la columna que contiene el valor o precio
+      col_val <- names(target_row)[grepl("valor|precio|nav", tolower(names(target_row)))]
+      
+      if (length(col_val) > 0) {
+        val_fid <- parse_number_dr(target_row[[col_val[1]]])
+      } else {
+        # Si no la encuentra por nombre, buscar el primer número válido en la fila
+        for (col in names(target_row)) {
+          temp_val <- parse_number_dr(target_row[[col]])
+          if (!is.na(temp_val) && temp_val > 100) {
+            val_fid <- temp_val
+            break
           }
         }
-        if (!is.na(val_fid)) break
       }
     }
   }
   
-  # --- MÉTODO B: Regex sobre Texto Plano (Sin etiquetas HTML) ---
+  # Respaldo Regex directo si falló el parseo de tabla
   if (is.na(val_fid)) {
-    cat("Buscando mediante limpieza de etiquetas HTML...\n")
-    # Remover todas las etiquetas HTML y normalizar espacios
-    txt_clean <- gsub("<[^>]+>", " ", txt_fid)
-    txt_clean <- gsub("\\s+", " ", txt_clean)
-    
-    # Expresión Regular para capturar el valor exacto tras la frase
-    pattern_fid <- '(?i)Valor\\s+patrimonial\\s+de\\s+los\\s+valores\\s+(?:RD\\$|RD)?\\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\\.[0-9]+)?)'
-    match_fid <- str_match(txt_clean, pattern_fid)
-    
-    if (!is.na(match_fid[1, 2])) {
-      val_fid <- parse_number_dr(match_fid[1, 2])
-      cat("NAV extraído vía Regex sobre texto limpio:", val_fid, "\n")
+    cat("Usando Regex en JMMB API...\n")
+    # Busca la estructura: "Multiplaza" seguido de su precio
+    pattern_jmmb <- '(?i)(?:DO9035100120|Multiplaza)[^}]*?(?:valor|precio|nav)"?\\s*:\\s*"?([0-9]+\\.[0-9]+)'
+    match_jmmb <- str_match(txt_jmmb, pattern_jmmb)
+    if (!is.na(match_jmmb[1, 2])) {
+      val_fid <- as.numeric(match_jmmb[1, 2])
     }
   }
 } else {
-  cat("ADVERTENCIA: No se pudo descargar la página de Fiduciaria Reservas (contenido vacio).\n")
+  cat("Intento fallido con JMMB. Ejecutando curl nativo...\n")
+  tmp_jmmb <- tempfile()
+  cmd_curl <- sprintf('curl -s -L -A "Mozilla/5.0" "%s" -o "%s"', url_jmmb_json, tmp_jmmb)
+  system(cmd_curl)
+  if (file.exists(tmp_jmmb) && file.info(tmp_jmmb)$size > 100) {
+    txt_jmmb <- paste(readLines(tmp_jmmb, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+    pattern_jmmb <- '(?i)(?:DO9035100120|Multiplaza)[^}]*?(?:valor|precio|nav)"?\\s*:\\s*"?([0-9]+\\.[0-9]+)'
+    match_jmmb <- str_match(txt_jmmb, pattern_jmmb)
+    if (!is.na(match_jmmb[1, 2])) {
+      val_fid <- as.numeric(match_jmmb[1, 2])
+    }
+  }
 }
 
 cat("Valor NAV detectado final:", val_fid, "\n")
@@ -162,11 +162,7 @@ if (!is.na(val_fid)) {
   }
   new_state[["multiplaza_valor"]] <- val_fid
 } else {
-  cat("ADVERTENCIA: No se pudo extraer el NAV de Fiduciaria Reservas.\n")
-  if (nchar(txt_fid) > 0) {
-    cat("Muestra del HTML recibido (primeros 300 caracteres):\n")
-    cat(substr(txt_fid, 1, 300), "\n")
-  }
+  cat("ADVERTENCIA: No se pudo extraer el NAV del API JMMB.\n")
 }
   # ==========================================
   # 2. AFI UNIVERSAL
