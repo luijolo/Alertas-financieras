@@ -54,129 +54,97 @@ tryCatch({
   # 1. FIDUCIARIA RESERVAS
   # ==========================================
 cat("\n==========================================\n")
-cat("1. PROCESANDO FIDUCIARIA RESERVAS (BVRD)\n")
+cat("1. PROCESANDO FIDUCIARIA RESERVAS (Multiplaza FR No. 02)\n")
 cat("==========================================\n")
 
-# Encabezados de un navegador real para evitar bloqueos
+# Encabezados de navegador real
 headers_browser <- add_headers(
   `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-  `Accept` = "application/json, text/html, application/xhtml+xml, */*",
-  `Accept-Language` = "es-ES,es;q=0.9,en;q=0.8",
-  `Referer` = "https://emisores.bvrd.com.do/",
-  `Origin` = "https://emisores.bvrd.com.do"
+  `Accept` = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+  `Accept-Language` = "es-ES,es;q=0.9,en;q=0.8"
 )
 
-# Opciones para ignorar errores estrictos de SSL en GitHub Actions
 opt_ssl <- config(ssl_verifypeer = FALSE, ssl_verifyhost = FALSE)
 
+# Fuente Principal: Portal Oficial de Fiduciaria Reservas
+url_fid_reservas <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
+# Fuente Secundaria: BVRD API
 url_bvrd_json <- "https://data.bvrd.com.do/emisores_renta_variable.json"
-url_bvrd_html <- "https://emisores.bvrd.com.do/"
 
 val_fid <- NA
-txt_bvrd <- ""
 
-# Intento 1: GET al JSON con encabezados de navegador y bypass SSL
-res_bvrd <- tryCatch({
-  GET(url_bvrd_json, headers_browser, opt_ssl, timeout(15))
+# --- FUENTE 1: FIDUCIARIA RESERVAS (Página Oficial) ---
+cat("Intentando obtener NAV desde Fiduciaria Reservas...\n")
+res_fid <- tryCatch({
+  GET(url_fid_reservas, headers_browser, opt_ssl, timeout(15))
 }, error = function(e) {
-  cat("Error de conexión httr al JSON:", conditionMessage(e), "\n")
+  cat("Error de conexión httr:", conditionMessage(e), "\n")
   return(NULL)
 })
 
-if (!is.null(res_bvrd) && status_code(res_bvrd) == 200) {
-  txt_bvrd <- content(res_bvrd, "text", encoding = "UTF-8")
+txt_fid <- ""
+if (!is.null(res_fid) && status_code(res_fid) == 200) {
+  txt_fid <- content(res_fid, "text", encoding = "UTF-8")
 } else {
-  cat("Intento 1 (JSON API) sin éxito. Probando Intento 2 (curl nativo)...\n")
-  
-  # Intento 2: Usar curl del sistema Linux
-  tmp_file <- tempfile()
-  cmd_curl <- sprintf('curl -s -k -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -H "Referer: https://emisores.bvrd.com.do/" "%s" -o "%s"', url_bvrd_json, tmp_file)
+  # Respaldo con curl nativo de Linux si httr falla
+  tmp_fid <- tempfile()
+  cmd_curl <- sprintf('curl -s -k -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "%s" -o "%s"', url_fid_reservas, tmp_fid)
   system(cmd_curl)
-  
-  if (file.exists(tmp_file) && file.info(tmp_file)$size > 50) {
-    txt_bvrd <- readLines(tmp_file, warn = FALSE, encoding = "UTF-8")
-    txt_bvrd <- paste(txt_bvrd, collapse = "\n")
+  if (file.exists(tmp_fid) && file.info(tmp_fid)$size > 100) {
+    txt_fid <- paste(readLines(tmp_fid, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
   }
 }
 
-# Intento 3: Si la API JSON falló por completo, raspar el portal HTML principal
-if (nchar(txt_bvrd) < 50) {
-  cat("Intento 3: Descargando portal web principal emisores.bvrd.com.do...\n")
-  res_html <- tryCatch({
-    GET(url_bvrd_html, headers_browser, opt_ssl, timeout(15))
+if (nchar(txt_fid) > 100) {
+  # Extrae el valor listado junto a "Valor patrimonial de los valores"
+  pattern_fid <- '(?i)Valor\\s+patrimonial\\s+de\\s+los\\s+valores(?!\\s+del\\s+d[íi]a\\s+anterior)[^RD]*?RD\\$\\s*([0-9]{1,4}(?:,[0-9]{3})*(?:\\.[0-9]+)?)'
+  match_fid <- str_match(txt_fid, pattern_fid)
+  
+  if (!is.na(match_fid[1, 2])) {
+    val_fid <- parse_number_dr(match_fid[1, 2])
+    cat("NAV capturado exitosamente desde Fiduciaria Reservas:", val_fid, "\n")
+  }
+}
+
+# --- FUENTE 2: BVRD JSON (Respaldo secundario) ---
+if (is.na(val_fid)) {
+  cat("Intentando respaldo desde BVRD JSON...\n")
+  res_bvrd <- tryCatch({
+    GET(url_bvrd_json, headers_browser, opt_ssl, timeout(15))
   }, error = function(e) NULL)
   
-  if (!is.null(res_html) && status_code(res_html) == 200) {
-    txt_bvrd <- content(res_html, "text", encoding = "UTF-8")
+  if (!is.null(res_bvrd) && status_code(res_bvrd) == 200) {
+    txt_bvrd <- content(res_bvrd, "text", encoding = "UTF-8")
+    pattern_nav <- '(?i)(?:DO9035100120|Multiplaza)[^}]*?"nav"\\s*:\\s*"?([0-9]+\\.[0-9]+)"?'
+    match_nav <- str_match(txt_bvrd, pattern_nav)
+    if (!is.na(match_nav[1, 2])) {
+      val_fid <- as.numeric(match_nav[1, 2])
+      cat("NAV capturado desde BVRD JSON:", val_fid, "\n")
+    }
   }
 }
 
-# --- PROCESAMIENTO Y EXTRACCIÓN DEL VALOR NAV ---
-if (nchar(txt_bvrd) > 50) {
+cat("Valor NAV detectado final:", val_fid, "\n")
+
+if (!is.na(val_fid)) {
+  prev_fid <- old_state[["multiplaza_valor"]]
   
-  # 1. Intentar parsear como JSON estructurado
-  json_parsed <- tryCatch({ fromJSON(txt_bvrd, simplifyDataFrame = TRUE) }, error = function(e) NULL)
-  
-  if (is.list(json_parsed) && !is.data.frame(json_parsed)) {
-    for (item in json_parsed) {
-      if (is.data.frame(item)) { json_parsed <- item; break }
-    }
-  }
-  
-  if (is.data.frame(json_parsed)) {
-    match_mask <- apply(json_parsed, 1, function(row) {
-      any(grepl("DO9035100120|Multiplaza|FR-N02|FR No. 02", as.character(unlist(row)), ignore.case = TRUE))
-    })
-    
-    if (any(match_mask)) {
-      target_row <- json_parsed[which(match_mask)[1], ]
-      nav_col <- names(target_row)[tolower(names(target_row)) == "nav"]
-      if (length(nav_col) > 0) {
-        val_fid <- parse_number_dr(target_row[[nav_col[1]]])
-      }
-    }
-  }
-  
-  # 2. Extracción Regex si no se parseó como DF
-  if (is.na(val_fid)) {
-    pattern_nav <- '(?i)(?:DO9035100120|Multiplaza)[^}]*?"nav"\\s*:\\s*"?([0-9]+\\.[0-9]+)"?'
-    match_nav <- str_match(txt_bvrd, pattern_nav)
-    
-    if (!is.na(match_nav[1, 2])) {
-      val_fid <- as.numeric(match_nav[1, 2])
-    } else {
-      # Patrón para tablas o fragmentos HTML / JSON alternativo
-      pattern_html <- '(?i)Multiplaza[\\s\\S]*?RD\\$\\s*([0-9]{1,4}(?:\\.[0-9]+)?)'
-      match_html <- str_match(txt_bvrd, pattern_html)
-      if (!is.na(match_html[1, 2])) {
-        val_fid <- parse_number_dr(match_html[1, 2])
-      }
-    }
-  }
-  
-  cat("Valor NAV detectado:", val_fid, "\n")
-  
-  if (!is.na(val_fid)) {
-    prev_fid <- old_state[["multiplaza_valor"]]
-    
-    if (is.null(prev_fid) || val_fid != prev_fid) {
-      inv_fid <- val_fid * 20
-      msg_fid <- paste0(
-        fecha_hoy, "\n",
-        "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
-        "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
-      )
-      send_telegram(msg_fid)
-      cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
-    } else {
-      cat("Sin cambios en Fiduciaria Reservas.\n")
-    }
-    new_state[["multiplaza_valor"]] <- val_fid
+  # Si es la primera corrida o si hubo un cambio de valor
+  if (is.null(prev_fid) || val_fid != prev_fid) {
+    inv_fid <- val_fid * 20
+    msg_fid <- paste0(
+      fecha_hoy, "\n",
+      "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
+      "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
+    )
+    send_telegram(msg_fid)
+    cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
   } else {
-    cat("ADVERTENCIA: No se pudo extraer el NAV del contenido recibido.\n")
+    cat("Sin cambios en Fiduciaria Reservas.\n")
   }
+  new_state[["multiplaza_valor"]] <- val_fid
 } else {
-  cat("ADVERTENCIA: No se logró obtener respuesta útil de ninguna fuente de BVRD.\n")
+  cat("ADVERTENCIA: No se pudo extraer el NAV de ninguna de las fuentes.\n")
 }
   # ==========================================
   # 2. AFI UNIVERSAL
