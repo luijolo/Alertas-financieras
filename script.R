@@ -58,32 +58,53 @@ res_fid <- tryCatch(GET(url_fid, headers_browser), error = function(e) NULL)
 
 if (!is.null(res_fid) && status_code(res_fid) == 200) {
   html_obj <- read_html(res_fid)
-  
   val_raw <- NA
   
-  # Estrategia 1: XPath directo a la celda <td/tr> que sigue a "Valor patrimonial de los valores"
-  nodo_valor <- html_node(html_obj, xpath = "//td[contains(., 'Valor patrimonial de los valores')]/following-sibling::td")
+  # Estrategia 1: XPath exacto a la fila (<tr>) cuya primera celda es EXACTAMENTE la etiqueta deseada
+  nodo_valor <- html_node(
+    html_obj, 
+    xpath = "//tr[td[1][normalize-space()='Valor patrimonial de los valores']]/td[2]"
+  )
   
   if (!is.null(nodo_valor) && !is.na(nodo_valor)) {
     val_raw <- html_text(nodo_valor, trim = TRUE)
-  } else {
-    # Estrategia 2 (Respaldo): Regex específico con el texto completo exacto de la etiqueta
+  }
+  
+  # Estrategia 2 (Respaldo 1): Búsqueda flexibilizada dentro de celdas <td>
+  if (is.na(val_raw) || nchar(val_raw) == 0) {
+    nodo_valor <- html_node(
+      html_obj, 
+      xpath = "//td[contains(normalize-space(), 'Valor patrimonial de los valores') and not(contains(., 'día anterior'))]/following-sibling::td[1]"
+    )
+    if (!is.null(nodo_valor) && !is.na(nodo_valor)) {
+      val_raw <- html_text(nodo_valor, trim = TRUE)
+    }
+  }
+  
+  # Estrategia 3 (Respaldo 2): Regex directo sobre el texto completo
+  if (is.na(val_raw) || nchar(val_raw) == 0) {
     texto_pagina <- html_text2(html_obj)
-    val_raw <- str_extract(texto_pagina, "(?i)Valor patrimonial de los valores\\s*RD\\$\\s*([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+)")
+    val_raw <- str_extract(
+      texto_pagina, 
+      "(?i)Valor patrimonial de los valores(?![^\n]*día anterior)[^\n0-9]*([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+)"
+    )
   }
   
-  # Extraer únicamente la cifra numérica (ej: de "RD$1,082.206265" a "1,082.206265")
+  # Limpieza y extracción de la cifra decimal
   if (!is.na(val_raw)) {
-    val_raw <- str_extract(val_raw, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
+    val_clean <- str_extract(val_raw, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
+    val_fid <- parse_number_dr(val_clean)
+  } else {
+    val_fid <- NA
   }
   
-  val_fid <- parse_number_dr(val_raw)
-  cat("Valor cuota Fiduciaria detectado:", val_fid, "\n")
+  cat("Valor bruto detectado :", val_raw, "\n")
+  cat("Valor cuota Fiduciaria:", val_fid, "\n")
   
   if (!is.na(val_fid)) {
     prev_fid <- old_state[["multiplaza_valor"]]
     
-    # Forzar notificación si el valor cambió respecto al JSON anterior
+    # Notificar si cambió o si es la primera ejecución
     if (is.null(prev_fid) || val_fid != prev_fid) {
       inv_fid <- val_fid * 20
       msg_fid <- paste0(
@@ -98,7 +119,7 @@ if (!is.null(res_fid) && status_code(res_fid) == 200) {
     }
     new_state[["multiplaza_valor"]] <- val_fid
   } else {
-    cat("Advertencia: No se pudo extraer el valor en Fiduciaria Reservas.\n")
+    cat("ADVERTENCIA: No se pudo extraer el valor. Verifique la estructura del sitio.\n")
   }
 }
   # ==========================================
