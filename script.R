@@ -43,65 +43,64 @@ tryCatch({
   new_state[["ultima_ejecucion"]] <- format(Sys.time(), "%Y-%m-%d %H:%M:%S AST")
 
 # ==========================================
-  # 1. FIDUCIARIA RESERVAS
-  # ==========================================
-  cat("\n==========================================\n")
-  cat("1. PROCESANDO FIDUCIARIA RESERVAS\n")
-  cat("==========================================\n")
-  
-  url_fid <- paste0(
-    "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/",
-    "?nocache=", as.numeric(Sys.time())
-  )
-  
-  res_fid <- tryCatch(GET(url_fid, headers_browser), error = function(e) NULL)
-  
-  if (!is.null(res_fid) && status_code(res_fid) == 200) {
-    html_obj <- read_html(res_fid)
-    
-    # 1. Intentar extraer el texto completo de la página para buscar por contexto
-    texto_pagina <- html_text2(html_obj)
-    
-    # Buscar el número inmediatamente posterior a palabras clave como "Valor", "Cuota" o "RD$"
-    val_raw <- str_extract(texto_pagina, "(?i)(?:cuota|valor)[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]{2,6})")
-    
-    # Extraer únicamente la cifra numérica de la coincidencia contextual
-    if (!is.na(val_raw)) {
-      val_raw <- str_extract(val_raw, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]{2,6}")
-    } else {
-      # Respaldo: Buscar en nodos específicos de tipo tabla o tarjetas de valor
-      nodos_texto <- html_nodes(html_obj, "td, span, div, p") %>% html_text(trim = TRUE)
-      coincidencias <- nodos_texto[grepl("1,[0-9]{3}\\.[0-9]{4,6}", nodos_texto)]
-      if (length(coincidencias) > 0) {
-        val_raw <- str_extract(coincidencias[1], "1,[0-9]{3}\\.[0-9]{4,6}")
-      }
-    }
-    
-    val_fid <- parse_number_dr(val_raw)
-    cat("Valor cuota Fiduciaria detectado:", val_fid, "\n")
-    
-    if (!is.na(val_fid)) {
-      prev_fid <- old_state[["multiplaza_valor"]]
-      
-      # Forzar notificación si el valor cambió respecto al JSON anterior
-      if (is.null(prev_fid) || val_fid != prev_fid) {
-        inv_fid <- val_fid * 20
-        msg_fid <- paste0(
-          fecha_hoy, "\n",
-          "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
-          "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
-        )
-        send_telegram(msg_fid)
-        cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
-      } else {
-        cat("Sin cambios en Fiduciaria Reservas.\n")
-      }
-      new_state[["multiplaza_valor"]] <- val_fid
-    } else {
-      cat("Advertencia: No se pudo extraer el valor en Fiduciaria Reservas.\n")
-    }
-  }
+# 1. FIDUCIARIA RESERVAS
+# ==========================================
+cat("\n==========================================\n")
+cat("1. PROCESANDO FIDUCIARIA RESERVAS\n")
+cat("==========================================\n")
 
+url_fid <- paste0(
+  "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/",
+  "?nocache=", as.numeric(Sys.time())
+)
+
+res_fid <- tryCatch(GET(url_fid, headers_browser), error = function(e) NULL)
+
+if (!is.null(res_fid) && status_code(res_fid) == 200) {
+  html_obj <- read_html(res_fid)
+  
+  val_raw <- NA
+  
+  # Estrategia 1: XPath directo a la celda <td/tr> que sigue a "Valor patrimonial de los valores"
+  nodo_valor <- html_node(html_obj, xpath = "//td[contains(., 'Valor patrimonial de los valores')]/following-sibling::td")
+  
+  if (!is.null(nodo_valor) && !is.na(nodo_valor)) {
+    val_raw <- html_text(nodo_valor, trim = TRUE)
+  } else {
+    # Estrategia 2 (Respaldo): Regex específico con el texto completo exacto de la etiqueta
+    texto_pagina <- html_text2(html_obj)
+    val_raw <- str_extract(texto_pagina, "(?i)Valor patrimonial de los valores\\s*RD\\$\\s*([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+)")
+  }
+  
+  # Extraer únicamente la cifra numérica (ej: de "RD$1,082.206265" a "1,082.206265")
+  if (!is.na(val_raw)) {
+    val_raw <- str_extract(val_raw, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
+  }
+  
+  val_fid <- parse_number_dr(val_raw)
+  cat("Valor cuota Fiduciaria detectado:", val_fid, "\n")
+  
+  if (!is.na(val_fid)) {
+    prev_fid <- old_state[["multiplaza_valor"]]
+    
+    # Forzar notificación si el valor cambió respecto al JSON anterior
+    if (is.null(prev_fid) || val_fid != prev_fid) {
+      inv_fid <- val_fid * 20
+      msg_fid <- paste0(
+        fecha_hoy, "\n",
+        "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
+        "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
+      )
+      send_telegram(msg_fid)
+      cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
+    } else {
+      cat("Sin cambios en Fiduciaria Reservas.\n")
+    }
+    new_state[["multiplaza_valor"]] <- val_fid
+  } else {
+    cat("Advertencia: No se pudo extraer el valor en Fiduciaria Reservas.\n")
+  }
+}
   # ==========================================
   # 2. AFI UNIVERSAL
   # ==========================================
