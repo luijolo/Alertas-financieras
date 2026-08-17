@@ -38,20 +38,39 @@ tryCatch({
   new_state <- old_state
 
   fecha_hoy <- format(Sys.Date(), "%d/%m/%Y")
+  
+  # Registra la fecha/hora actual para forzar cambio en Git en cada corrida
+  new_state[["ultima_ejecucion"]] <- format(Sys.time(), "%Y-%m-%d %H:%M:%S AST")
 
-  # ==========================================
+# ==========================================
   # 1. FIDUCIARIA RESERVAS
   # ==========================================
   cat("\n==========================================\n")
   cat("1. PROCESANDO FIDUCIARIA RESERVAS\n")
   cat("==========================================\n")
-  url_fid <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
   
-  res_fid <- GET(url_fid, add_headers(`User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"))
+  # URL con parámetro anti-caché para forzar respuesta en tiempo real
+  url_fid <- paste0(
+    "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/",
+    "?nocache=", as.numeric(Sys.time())
+  )
   
-  if (status_code(res_fid) == 200) {
+  headers_nocache <- add_headers(
+    `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    `Cache-Control` = "no-cache, no-store, must-revalidate",
+    `Pragma` = "no-cache"
+  )
+  
+  res_fid <- tryCatch(GET(url_fid, headers_nocache), error = function(e) NULL)
+  
+  if (!is.null(res_fid) && status_code(res_fid) == 200) {
     html_raw_fid <- content(res_fid, "text", encoding = "UTF-8")
-    val_raw <- str_extract(html_raw_fid, "1,[0-9]{3}\\.[0-9]{4,6}")
+    
+    # Extraer TODAS las coincidencias de números de cuota (ej: 1,082.206265)
+    coincidencias <- unlist(str_extract_all(html_raw_fid, "1,[0-9]{3}\\.[0-9]{4,6}"))
+    
+    # Si hay varias, tomar la última que suele ser el valor publicado en el cuerpo principal
+    val_raw <- if (length(coincidencias) > 0) tail(coincidencias, 1) else NA
     val_fid <- parse_number_dr(val_raw)
     
     cat("Valor cuota Fiduciaria detectado:", val_fid, "\n")
@@ -71,6 +90,8 @@ tryCatch({
         cat("Sin cambios en Fiduciaria Reservas.\n")
       }
       new_state[["multiplaza_valor"]] <- val_fid
+    } else {
+      cat("Advertencia: No se pudo extraer el valor en Fiduciaria Reservas.\n")
     }
   }
 
@@ -89,9 +110,9 @@ tryCatch({
 
   for (f in fondos_afi) {
     url_afi_code <- paste0("https://www.afiuniversal.com.do/funds/QuotaValues/", f$code)
-    res_afi <- GET(url_afi_code, headers_browser)
+    res_afi <- tryCatch(GET(url_afi_code, headers_browser), error = function(e) NULL)
     
-    if (status_code(res_afi) == 200) {
+    if (!is.null(res_afi) && status_code(res_afi) == 200) {
       txt_afi <- content(res_afi, "text", encoding = "UTF-8")
       json_parsed <- tryCatch({ fromJSON(txt_afi) }, error = function(e) NULL)
       
@@ -142,11 +163,12 @@ tryCatch({
   
   url_cev_api <- "https://www.cevaldom.com/api/cevaldom/fetch-prices"
   
-  res_cev_get <- GET(url_cev_api, headers_browser)
-  res_cev_post <- POST(url_cev_api, headers_browser)
-  res_cev_active <- if (status_code(res_cev_get) == 200) res_cev_get else res_cev_post
+  res_cev_get <- tryCatch(GET(url_cev_api, headers_browser), error = function(e) NULL)
+  res_cev_post <- tryCatch(POST(url_cev_api, headers_browser), error = function(e) NULL)
   
-  if (status_code(res_cev_active) == 200) {
+  res_cev_active <- if (!is.null(res_cev_get) && status_code(res_cev_get) == 200) res_cev_get else res_cev_post
+  
+  if (!is.null(res_cev_active) && status_code(res_cev_active) == 200) {
     txt_cev <- content(res_cev_active, "text", encoding = "UTF-8")
     
     isin_objetivo <- "DO9035100120"
@@ -161,19 +183,15 @@ tryCatch({
       if (!is.null(json_cev)) {
         df_cev <- as.data.frame(json_cev)
         
-        # Buscar filas que tengan el ISIN objetivo
         filas_coincidentes <- which(apply(df_cev, 1, function(row) any(grepl(isin_objetivo, row, ignore.case = TRUE))))
         
         if (length(filas_coincidentes) > 0) {
           for (idx in filas_coincidentes) {
             fila <- df_cev[idx, ]
             row_str <- paste(unname(unlist(fila)), collapse = "_")
-            
-            # Crear un identificador único para la transacción
             trade_id <- paste0(isin_objetivo, "_", gsub("[^a-zA-Z0-9_]", "", row_str))
             
             if (!(trade_id %in% trades_vistos)) {
-              # Extraer campos si existen
               precio_limpio <- if (!is.null(fila$precioLimpio)) fila$precioLimpio else if (!is.null(fila$precio)) fila$precio else "Consultar"
               hora_pacto <- if (!is.null(fila$horaPacto)) fila$horaPacto else if (!is.null(fila$hora)) fila$hora else fecha_hoy
               
@@ -192,7 +210,6 @@ tryCatch({
           }
         }
       } else {
-        # Respaldo en caso de que el JSON tenga un formato distinto
         trade_id <- paste0(isin_objetivo, "_", fecha_hoy)
         if (!(trade_id %in% trades_vistos)) {
           msg_otc <- paste0(
@@ -205,7 +222,6 @@ tryCatch({
         }
       }
       
-      # Mantiene un historial de los últimos 50 trades vistos
       new_state[["otc_trades_vistos"]] <- tail(trades_vistos, 50)
     } else {
       cat("No se encontraron transacciones hoy para el ISIN", isin_objetivo, "\n")
