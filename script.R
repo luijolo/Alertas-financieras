@@ -49,34 +49,41 @@ tryCatch({
   cat("1. PROCESANDO FIDUCIARIA RESERVAS\n")
   cat("==========================================\n")
   
-  # URL con parámetro anti-caché para forzar respuesta en tiempo real
   url_fid <- paste0(
     "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/",
     "?nocache=", as.numeric(Sys.time())
   )
   
-  headers_nocache <- add_headers(
-    `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    `Cache-Control` = "no-cache, no-store, must-revalidate",
-    `Pragma` = "no-cache"
-  )
-  
-  res_fid <- tryCatch(GET(url_fid, headers_nocache), error = function(e) NULL)
+  res_fid <- tryCatch(GET(url_fid, headers_browser), error = function(e) NULL)
   
   if (!is.null(res_fid) && status_code(res_fid) == 200) {
-    html_raw_fid <- content(res_fid, "text", encoding = "UTF-8")
+    html_obj <- read_html(res_fid)
     
-    # Extraer TODAS las coincidencias de números de cuota (ej: 1,082.206265)
-    coincidencias <- unlist(str_extract_all(html_raw_fid, "1,[0-9]{3}\\.[0-9]{4,6}"))
+    # 1. Intentar extraer el texto completo de la página para buscar por contexto
+    texto_pagina <- html_text2(html_obj)
     
-    # Si hay varias, tomar la última que suele ser el valor publicado en el cuerpo principal
-    val_raw <- if (length(coincidencias) > 0) tail(coincidencias, 1) else NA
+    # Buscar el número inmediatamente posterior a palabras clave como "Valor", "Cuota" o "RD$"
+    val_raw <- str_extract(texto_pagina, "(?i)(?:cuota|valor)[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]{2,6})")
+    
+    # Extraer únicamente la cifra numérica de la coincidencia contextual
+    if (!is.na(val_raw)) {
+      val_raw <- str_extract(val_raw, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]{2,6}")
+    } else {
+      # Respaldo: Buscar en nodos específicos de tipo tabla o tarjetas de valor
+      nodos_texto <- html_nodes(html_obj, "td, span, div, p") %>% html_text(trim = TRUE)
+      coincidencias <- nodos_texto[grepl("1,[0-9]{3}\\.[0-9]{4,6}", nodos_texto)]
+      if (length(coincidencias) > 0) {
+        val_raw <- str_extract(coincidencias[1], "1,[0-9]{3}\\.[0-9]{4,6}")
+      }
+    }
+    
     val_fid <- parse_number_dr(val_raw)
-    
     cat("Valor cuota Fiduciaria detectado:", val_fid, "\n")
     
     if (!is.na(val_fid)) {
       prev_fid <- old_state[["multiplaza_valor"]]
+      
+      # Forzar notificación si el valor cambió respecto al JSON anterior
       if (is.null(prev_fid) || val_fid != prev_fid) {
         inv_fid <- val_fid * 20
         msg_fid <- paste0(
