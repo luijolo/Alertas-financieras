@@ -53,66 +53,64 @@ tryCatch({
   # ==========================================
   # 1. FIDUCIARIA RESERVAS
   # ==========================================
-  cat("\n==========================================\n")
-  cat("1. PROCESANDO FIDUCIARIA RESERVAS\n")
-  cat("==========================================\n")
+ url_bvrd_json <- "https://data.bvrd.com.do/emisores_renta_variable.json"
 
-  url_fid <- paste0(
-    "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/",
-    "?nocache=", as.numeric(Sys.time())
-  )
+res_bvrd <- tryCatch(GET(url_bvrd_json, headers_json), error = function(e) NULL)
 
-  res_fid <- tryCatch(GET(url_fid, headers_html), error = function(e) NULL)
-
-  if (!is.null(res_fid) && status_code(res_fid) == 200) {
-    html_obj <- read_html(res_fid)
+if (!is.null(res_bvrd) && status_code(res_bvrd) == 200) {
+  txt_bvrd <- content(res_bvrd, "text", encoding = "UTF-8")
+  json_bvrd <- tryCatch({ fromJSON(txt_bvrd) }, error = function(e) NULL)
+  
+  val_fid <- NA
+  
+  if (!is.null(json_bvrd)) {
+    df_bvrd <- as.data.frame(json_bvrd)
     
-    # 1. Extraer todo el texto de la página y convertir saltos de línea/espacios en espacios simples
-    texto_pagina <- html_text2(html_obj)
-    if (nchar(texto_pagina) < 50) texto_pagina <- html_text(html_obj)
+    # Buscar la fila que corresponda al Fideicomiso Multiplaza
+    idx_target <- which(apply(df_bvrd, 1, function(row) {
+      any(grepl("Multiplaza|DO9035100120|FR No. 02|FR-N02", row, ignore.case = TRUE))
+    }))
     
-    texto_flat <- gsub("\\s+", " ", texto_pagina)
-    
-    # 2. Eliminar primero el bloque del "día anterior" para evitar falsos positivos de valores pasados
-    texto_sin_anterior <- gsub(
-      "(?i)Valor patrimonial de los valores\\s*(?:del\\s*)?día\\s*anterior[^0-9]*[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+", 
-      "", 
-      texto_flat
-    )
-    
-    # 3. Capturar el texto desde "Valor patrimonial de los valores" hasta la cifra actual
-    match_str <- str_extract(
-      texto_sin_anterior, 
-      "(?i)Valor patrimonial de los valores[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+)"
-    )
-    
-    # 4. Aislar la cifra decimal y convertir a entero/numérico
-    val_clean <- if (!is.na(match_str)) str_extract(match_str, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+") else NA
-    val_fid <- parse_number_dr(val_clean)
-    
-    cat("Texto coincidente extraído:", match_str, "\n")
-    cat("Valor cuota Fiduciaria   :", val_fid, "\n")
-    
-    if (!is.na(val_fid)) {
-      prev_fid <- old_state[["multiplaza_valor"]]
+    if (length(idx_target) > 0) {
+      fila_target <- df_bvrd[idx_target[1], ]
       
-      if (is.null(prev_fid) || val_fid != prev_fid) {
-        inv_fid <- val_fid * 20
-        msg_fid <- paste0(
-          fecha_hoy, "\n",
-          "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
-          "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
-        )
-        send_telegram(msg_fid)
-        cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
+      # Extraer el campo 'nav' directo del JSON
+      if (!is.null(fila_target$nav)) {
+        val_fid <- parse_number_dr(fila_target$nav)
       } else {
-        cat("Sin cambios en Fiduciaria Reservas.\n")
+        col_nav <- names(fila_target)[tolower(names(fila_target)) == "nav"]
+        if (length(col_nav) > 0) {
+          val_fid <- parse_number_dr(fila_target[[col_nav[1]]])
+        }
       }
-      new_state[["multiplaza_valor"]] <- val_fid
-    } else {
-      cat("ADVERTENCIA: No se pudo extraer el valor en Fiduciaria Reservas.\n")
     }
   }
+  
+  cat("Valor cuota (NAV) detectado:", val_fid, "\n")
+  
+  if (!is.na(val_fid)) {
+    prev_fid <- old_state[["multiplaza_valor"]]
+    
+    # Notificar si cambió o si es la primera ejecución
+    if (is.null(prev_fid) || val_fid != prev_fid) {
+      inv_fid <- val_fid * 20
+      msg_fid <- paste0(
+        fecha_hoy, "\n",
+        "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
+        "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
+      )
+      send_telegram(msg_fid)
+      cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
+    } else {
+      cat("Sin cambios en Fiduciaria Reservas.\n")
+    }
+    new_state[["multiplaza_valor"]] <- val_fid
+  } else {
+    cat("ADVERTENCIA: No se encontró el registro o la propiedad 'nav' para Multiplaza.\n")
+  }
+} else {
+  cat("ADVERTENCIA: No se pudo obtener respuesta del endpoint JSON de BVRD.\n")
+}
 
   # ==========================================
   # 2. AFI UNIVERSAL
