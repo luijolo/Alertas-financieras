@@ -11,7 +11,7 @@ send_telegram <- function(msg) {
   url <- paste0("https://api.telegram.org/bot", token, "/sendMessage")
   res <- POST(url, body = list(chat_id = chat_id, text = msg), encode = "form")
   if (status_code(res) != 200) {
-    stop(paste("Telegram rechazó el mensaje con código", status_code(res)))
+    cat("Error en envío a Telegram. Código:", status_code(res), "\n")
   }
 }
 
@@ -46,124 +46,93 @@ tryCatch({
   new_state <- old_state
 
   fecha_hoy <- format(Sys.Date(), "%d/%m/%Y")
-  
-  # Registra la fecha/hora actual para forzar cambio en Git en cada corrida
   new_state[["ultima_ejecucion"]] <- format(Sys.time(), "%Y-%m-%d %H:%M:%S AST")
 
   # ==========================================
-# 1. FIDUCIARIA RESERVAS (Multiplaza FR No. 02) vía JMMB API
-# ==========================================
-cat("\n==========================================\n")
-cat("1. PROCESANDO FIDUCIARIA RESERVAS (JMMB API)\n")
-cat("==========================================\n")
+  # 1. FIDUCIARIA RESERVAS (Multiplaza FR No. 02) - Estrategia Multifuente
+  # ==========================================
+  cat("\n==========================================\n")
+  cat("1. PROCESANDO FIDUCIARIA RESERVAS (Multifuente)\n")
+  cat("==========================================\n")
 
-# URL directa de la API de precios de JMMB
-url_jmmb_json <- "https://api.jmmb.com.do/api/fondos/historico"
+  val_fid <- NA
 
-# Encabezados básicos para el JSON
-headers_jmmb <- add_headers(
-  `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-  `Accept` = "application/json"
-)
+  # Intento A: Web Oficial Fiduciaria Reservas
+  cat("Intento 1: Web oficial de Fiduciaria Reservas...\n")
+  url_fid_web <- "https://www.fiduciariareservas.com.do/"
+  res_fid_web <- tryCatch(GET(url_fid_web, headers_html, config(ssl_verifypeer = FALSE), timeout(15)), error = function(e) NULL)
 
-val_fid <- NA
-
-# Realizar la petición a JMMB
-res_jmmb <- tryCatch({
-  GET(url_jmmb_json, headers_jmmb, timeout(15))
-}, error = function(e) {
-  cat("Error en httr GET a JMMB:", conditionMessage(e), "\n")
-  return(NULL)
-})
-
-# Procesar la respuesta
-if (!is.null(res_jmmb) && status_code(res_jmmb) == 200) {
-  txt_jmmb <- content(res_jmmb, "text", encoding = "UTF-8")
-  
-  # Parsear el JSON de JMMB
-  json_jmmb <- tryCatch({ fromJSON(txt_jmmb, simplifyDataFrame = TRUE) }, error = function(e) NULL)
-  
-  # Extraer la estructura de datos (puede venir en json_jmmb$data)
-  df_jmmb <- NULL
-  if (is.data.frame(json_jmmb)) {
-    df_jmmb <- json_jmmb
-  } else if (is.list(json_jmmb) && "data" %in% names(json_jmmb)) {
-    df_jmmb <- as.data.frame(json_jmmb$data)
-  }
-  
-  # Buscar el Fideicomiso Multiplaza dentro de la tabla de precios
-  if (!is.null(df_jmmb) && nrow(df_jmmb) > 0) {
-    match_mask <- apply(df_jmmb, 1, function(row) {
-      any(grepl("DO9035100120|Multiplaza|FR No. 02", as.character(row), ignore.case = TRUE))
-    })
+  if (!is.null(res_fid_web) && status_code(res_fid_web) == 200) {
+    html_fid <- content(res_fid_web, "text", encoding = "UTF-8")
+    page_fid <- read_html(html_fid)
     
-    if (any(match_mask)) {
-      target_row <- df_jmmb[which(match_mask)[1], ]
-      
-      # Buscar la columna que contiene el valor o precio
-      col_val <- names(target_row)[grepl("valor|precio|nav", tolower(names(target_row)))]
-      
-      if (length(col_val) > 0) {
-        val_fid <- parse_number_dr(target_row[[col_val[1]]])
-      } else {
-        # Si no la encuentra por nombre, buscar el primer número válido en la fila
-        for (col in names(target_row)) {
-          temp_val <- parse_number_dr(target_row[[col]])
-          if (!is.na(temp_val) && temp_val > 100) {
-            val_fid <- temp_val
-            break
-          }
-        }
+    # Extraer bloques con información del fideicomiso Multiplaza o ISIN DO9035100120
+    match_nodes <- html_nodes(page_fid, "table, div, p, span, td") %>% html_text()
+    match_targets <- match_nodes[grepl("Multiplaza|DO9035100120|FR No\\. 02", match_nodes, ignore.case = TRUE)]
+    
+    if (length(match_targets) > 0) {
+      pattern <- "(?:Multiplaza|DO9035100120|FR No\\. 02)[^0-9]*?([0-9]{1,4}(?:\\.[0-9]{2,6}|,[0-9]{2,6}))"
+      m <- str_match(match_targets[1], pattern)
+      if (!is.na(m[1, 2])) {
+        val_fid <- parse_number_dr(m[1, 2])
       }
     }
   }
-  
-  # Respaldo Regex directo si falló el parseo de tabla
+
+  # Intento B: Web Pública de Precios JMMB
   if (is.na(val_fid)) {
-    cat("Usando Regex en JMMB API...\n")
-    # Busca la estructura: "Multiplaza" seguido de su precio
-    pattern_jmmb <- '(?i)(?:DO9035100120|Multiplaza)[^}]*?(?:valor|precio|nav)"?\\s*:\\s*"?([0-9]+\\.[0-9]+)'
-    match_jmmb <- str_match(txt_jmmb, pattern_jmmb)
-    if (!is.na(match_jmmb[1, 2])) {
-      val_fid <- as.numeric(match_jmmb[1, 2])
+    cat("Intento 2: Portal público de precios JMMB...\n")
+    url_jmmb_pub <- "https://do.jmmb.com/precios"
+    res_jmmb_pub <- tryCatch(GET(url_jmmb_pub, headers_html, config(ssl_verifypeer = FALSE), timeout(15)), error = function(e) NULL)
+    
+    if (!is.null(res_jmmb_pub) && status_code(res_jmmb_pub) == 200) {
+      txt_jmmb <- content(res_jmmb_pub, "text", encoding = "UTF-8")
+      pattern_jmmb <- "(?i)(?:DO9035100120|Multiplaza|FR No\\. 02)[^0-9]*?([0-9]{1,4}\\.[0-9]{2,6})"
+      match_jmmb <- str_match(txt_jmmb, pattern_jmmb)
+      if (!is.na(match_jmmb[1, 2])) {
+        val_fid <- parse_number_dr(match_jmmb[1, 2])
+      }
     }
   }
-} else {
-  cat("Intento fallido con JMMB. Ejecutando curl nativo...\n")
-  tmp_jmmb <- tempfile()
-  cmd_curl <- sprintf('curl -s -L -A "Mozilla/5.0" "%s" -o "%s"', url_jmmb_json, tmp_jmmb)
-  system(cmd_curl)
-  if (file.exists(tmp_jmmb) && file.info(tmp_jmmb)$size > 100) {
-    txt_jmmb <- paste(readLines(tmp_jmmb, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
-    pattern_jmmb <- '(?i)(?:DO9035100120|Multiplaza)[^}]*?(?:valor|precio|nav)"?\\s*:\\s*"?([0-9]+\\.[0-9]+)'
-    match_jmmb <- str_match(txt_jmmb, pattern_jmmb)
-    if (!is.na(match_jmmb[1, 2])) {
-      val_fid <- as.numeric(match_jmmb[1, 2])
+
+  # Intento C: Portal de la Bolsa de Valores de la RD (BVRD)
+  if (is.na(val_fid)) {
+    cat("Intento 3: Portal BVRD (Fideicomisos)...\n")
+    url_bvrd <- "https://bvrd.com.do/fideicomisos/"
+    res_bvrd <- tryCatch(GET(url_bvrd, headers_html, config(ssl_verifypeer = FALSE), timeout(15)), error = function(e) NULL)
+    
+    if (!is.null(res_bvrd) && status_code(res_bvrd) == 200) {
+      txt_bvrd <- content(res_bvrd, "text", encoding = "UTF-8")
+      pattern_bvrd <- "(?i)(?:DO9035100120|Multiplaza)[^0-9]*?([0-9]{1,4}\\.[0-9]{2,6})"
+      match_bvrd <- str_match(txt_bvrd, pattern_bvrd)
+      if (!is.na(match_bvrd[1, 2])) {
+        val_fid <- parse_number_dr(match_bvrd[1, 2])
+      }
     }
   }
-}
 
-cat("Valor NAV detectado final:", val_fid, "\n")
+  cat("Valor NAV detectado final:", val_fid, "\n")
 
-if (!is.na(val_fid)) {
-  prev_fid <- old_state[["multiplaza_valor"]]
-  
-  if (is.null(prev_fid) || val_fid != prev_fid) {
-    inv_fid <- val_fid * 20
-    msg_fid <- paste0(
-      fecha_hoy, "\n",
-      "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
-      "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
-    )
-    send_telegram(msg_fid)
-    cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
+  if (!is.na(val_fid)) {
+    prev_fid <- old_state[["multiplaza_valor"]]
+    
+    if (is.null(prev_fid) || val_fid != prev_fid) {
+      inv_fid <- val_fid * 20
+      msg_fid <- paste0(
+        fecha_hoy, "\n",
+        "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
+        "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
+      )
+      send_telegram(msg_fid)
+      cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
+    } else {
+      cat("Sin cambios en Fiduciaria Reservas.\n")
+    }
+    new_state[["multiplaza_valor"]] <- val_fid
   } else {
-    cat("Sin cambios en Fiduciaria Reservas.\n")
+    cat("ADVERTENCIA: No se pudo extraer el NAV de Fiduciaria Reservas desde ninguna fuente.\n")
   }
-  new_state[["multiplaza_valor"]] <- val_fid
-} else {
-  cat("ADVERTENCIA: No se pudo extraer el NAV del API JMMB.\n")
-}
+
   # ==========================================
   # 2. AFI UNIVERSAL
   # ==========================================
@@ -179,7 +148,7 @@ if (!is.na(val_fid)) {
 
   for (f in fondos_afi) {
     url_afi_code <- paste0("https://www.afiuniversal.com.do/funds/QuotaValues/", f$code)
-    res_afi <- tryCatch(GET(url_afi_code, headers_json), error = function(e) NULL)
+    res_afi <- tryCatch(GET(url_afi_code, headers_json, config(ssl_verifypeer = FALSE), timeout(15)), error = function(e) NULL)
     
     if (!is.null(res_afi) && status_code(res_afi) == 200) {
       txt_afi <- content(res_afi, "text", encoding = "UTF-8")
@@ -232,8 +201,8 @@ if (!is.na(val_fid)) {
 
   url_cev_api <- "https://www.cevaldom.com/api/cevaldom/fetch-prices"
 
-  res_cev_get <- tryCatch(GET(url_cev_api, headers_json), error = function(e) NULL)
-  res_cev_post <- tryCatch(POST(url_cev_api, headers_json), error = function(e) NULL)
+  res_cev_get <- tryCatch(GET(url_cev_api, headers_json, config(ssl_verifypeer = FALSE), timeout(15)), error = function(e) NULL)
+  res_cev_post <- tryCatch(POST(url_cev_api, headers_json, config(ssl_verifypeer = FALSE), timeout(15)), error = function(e) NULL)
 
   res_cev_active <- if (!is.null(res_cev_get) && status_code(res_cev_get) == 200) res_cev_get else res_cev_post
 
@@ -297,7 +266,6 @@ if (!is.na(val_fid)) {
     }
   }
 
-  # Guardar estado persistente en el archivo JSON
   write_json(new_state, state_file, auto_unbox = TRUE, pretty = TRUE)
   cat("\n--- PROCESO FINALIZADO --- Estado guardado en", state_file, "\n")
 
