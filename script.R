@@ -1,7 +1,13 @@
+# Comprobación e instalación automática de paquetes
+needed_packages <- c("httr", "readxl", "digest", "jsonlite")
+new_packages <- needed_packages[!(needed_packages %in% installed.packages()[, "Package"])]
+if (length(new_packages) > 0) {
+  install.packages(new_packages, repos = "https://cloud.r-project.org")
+}
+
 library(httr)
 library(readxl)
 library(digest)
-library(readxl)
 library(jsonlite)
 
 start_time <- Sys.time()
