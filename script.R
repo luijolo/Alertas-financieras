@@ -54,8 +54,15 @@ tryCatch({
   
   if (!is.null(res_fid) && status_code(res_fid) == 200) {
     html_raw_fid <- content(res_fid, "text", encoding = "UTF-8")
-    # Regex flexible para detectar cuotas numéricas con comas y decimales
-    val_raw <- str_extract(html_raw_fid, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]{2,6}")
+    
+    # 1. Buscar el bloque específico usando (?si) para permitir saltos de línea entre el texto y el número
+    # Buscamos "Valor patrimonial de los valores", seguido de cualquier cosa, hasta encontrar "RD$" y el número.
+    bloque_texto <- str_extract(html_raw_fid, "(?si)Valor patrimonial de los valores.*?RD\\$\\s*[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
+    
+    # 2. Extraer limpiamente solo la porción numérica de ese bloque encontrado
+    val_raw <- str_extract(bloque_texto, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
+    
+    # 3. Convertir a numérico usando tu función existente
     val_fid <- parse_number_dr(val_raw)
     
     cat("Valor cuota Fiduciaria detectado:", val_fid, "\n")
@@ -74,7 +81,9 @@ tryCatch({
       } else {
         cat("Sin cambios en Fiduciaria Reservas.\n")
       }
-      new_state[["multiplaza_valor"]] <- val_fid
+      
+      # Aquí se guarda correctamente en el JSON de estado
+      new_state[["multiplaza_valor"]] <- val_fid 
     } else {
       cat("Advertencia: No se pudo extraer el valor de la cuota en Fiduciaria Reservas.\n")
     }
