@@ -42,7 +42,7 @@ tryCatch({
   # Registra la fecha/hora actual para forzar cambio en Git en cada corrida
   new_state[["ultima_ejecucion"]] <- format(Sys.time(), "%Y-%m-%d %H:%M:%S AST")
 
-  # ==========================================
+# ==========================================
   # 1. FIDUCIARIA RESERVAS
   # ==========================================
   cat("\n==========================================\n")
@@ -50,43 +50,52 @@ tryCatch({
   cat("==========================================\n")
   url_fid <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
   
-  res_fid <- tryCatch(GET(url_fid, headers_browser), error = function(e) NULL)
+  # Agregamos un timeout de 15 segundos por si el servidor se queda colgado
+  res_fid <- tryCatch(GET(url_fid, headers_browser, timeout(15)), error = function(e) {
+    cat("Error de conexión:", e$message, "\n")
+    return(NULL)
+  })
   
-  if (!is.null(res_fid) && status_code(res_fid) == 200) {
-    html_raw_fid <- content(res_fid, "text", encoding = "UTF-8")
-    
-    # 1. Buscar el bloque específico usando (?si) para permitir saltos de línea entre el texto y el número
-    # Buscamos "Valor patrimonial de los valores", seguido de cualquier cosa, hasta encontrar "RD$" y el número.
-    bloque_texto <- str_extract(html_raw_fid, "(?si)Valor patrimonial de los valores.*?RD\\$\\s*[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
-    
-    # 2. Extraer limpiamente solo la porción numérica de ese bloque encontrado
-    val_raw <- str_extract(bloque_texto, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
-    
-    # 3. Convertir a numérico usando tu función existente
-    val_fid <- parse_number_dr(val_raw)
-    
-    cat("Valor cuota Fiduciaria detectado:", val_fid, "\n")
-    
-    if (!is.na(val_fid)) {
-      prev_fid <- old_state[["multiplaza_valor"]]
-      if (is.null(prev_fid) || val_fid != prev_fid) {
-        inv_fid <- val_fid * 20
-        msg_fid <- paste0(
-          fecha_hoy, "\n",
-          "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
-          "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
-        )
-        send_telegram(msg_fid)
-        cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
-      } else {
-        cat("Sin cambios en Fiduciaria Reservas.\n")
-      }
+  if (!is.null(res_fid)) {
+    # Verificamos si el código de estado es 200 (OK)
+    if (status_code(res_fid) == 200) {
+      html_raw_fid <- content(res_fid, "text", encoding = "UTF-8")
       
-      # Aquí se guarda correctamente en el JSON de estado
-      new_state[["multiplaza_valor"]] <- val_fid 
+      # 1. Buscar el bloque específico usando (?si)
+      bloque_texto <- str_extract(html_raw_fid, "(?si)Valor patrimonial de los valores.*?RD\\$\\s*[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
+      
+      # 2. Extraer limpiamente solo la porción numérica
+      val_raw <- str_extract(bloque_texto, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
+      
+      # 3. Convertir a numérico
+      val_fid <- parse_number_dr(val_raw)
+      
+      cat("Valor cuota Fiduciaria detectado:", val_fid, "\n")
+      
+      if (!is.na(val_fid)) {
+        prev_fid <- old_state[["multiplaza_valor"]]
+        if (is.null(prev_fid) || val_fid != prev_fid) {
+          inv_fid <- val_fid * 20
+          msg_fid <- paste0(
+            fecha_hoy, "\n",
+            "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
+            "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
+          )
+          send_telegram(msg_fid)
+          cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
+        } else {
+          cat("Sin cambios en Fiduciaria Reservas.\n")
+        }
+        new_state[["multiplaza_valor"]] <- val_fid 
+      } else {
+        cat("Advertencia: No se pudo extraer el valor de la cuota en Fiduciaria Reservas.\n")
+      }
     } else {
-      cat("Advertencia: No se pudo extraer el valor de la cuota en Fiduciaria Reservas.\n")
+      # Si el servidor responde, pero no es un 200 (ej. 403, 404, 500)
+      cat("Error HTTP Fiduciaria Reservas: El servidor respondió con el código", status_code(res_fid), "\n")
     }
+  } else {
+    cat("Error Fiduciaria Reservas: La petición devolvió NULL (Posible bloqueo o timeout).\n")
   }
 
   # ==========================================
