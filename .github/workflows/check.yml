@@ -27,7 +27,7 @@ jobs:
       - name: Instalar dependencias
         run: |
           options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/jammy/latest"))
-          install.packages(c("httr", "rvest", "jsonlite", "stringr"))
+          install.packages(c("httr", "readxl", "digest", "jsonlite"))
         shell: Rscript {0}
 
       - name: Ejecutar Script de Fondos
