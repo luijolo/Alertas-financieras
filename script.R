@@ -18,6 +18,16 @@ send_telegram <- function(msg) {
   }
 }
 
+# Función auxiliar para guardar el estado de forma segura e inmediata
+save_state <- function(state, file) {
+  tryCatch({
+    write_json(state, file, auto_unbox = TRUE, pretty = TRUE)
+    cat("Estado actualizado exitosamente en", file, "\n")
+  }, error = function(e) {
+    cat("Error al escribir el archivo de estado:", e$message, "\n")
+  })
+}
+
 Sys.setenv(CHROMOTE_CHROME_ARGS = "--no-sandbox --disable-dev-shm-usage --disable-gpu")
 
 parse_number_dr <- function(text) {
@@ -38,13 +48,15 @@ tryCatch({
   
   old_state <- list()
   if (file.exists(state_file) && file.info(state_file)$size > 2) {
-    tryCatch({ old_state <- fromJSON(state_file) }, error = function(e) list())
+    tryCatch({ 
+      # simplifyVector = FALSE garantiza que old_state sea una lista estándar de R
+      parsed_json <- fromJSON(state_file, simplifyVector = FALSE) 
+      if (is.list(parsed_json)) old_state <- parsed_json
+    }, error = function(e) list())
   }
   new_state <- old_state
 
   fecha_hoy <- format(Sys.Date(), "%d/%m/%Y")
-  
-  # Registra la fecha/hora actual para forzar cambio en Git en cada corrida
   new_state[["ultima_ejecucion"]] <- format(Sys.time(), "%Y-%m-%d %H:%M:%S AST")
 
   # ==========================================
@@ -103,7 +115,6 @@ tryCatch({
     cat("Valor bruto detectado:", val_raw, "\n")
     cat("Valor cuota Fiduciaria:", val_fid, "\n")
 
-    # Solución de variable de entorno con respaldo (fallback)
     fop_multi_env <- Sys.getenv("FOP_GR")
     fop_multi <- suppressWarnings(as.numeric(fop_multi_env))
     if (is.na(fop_multi)) {
@@ -112,10 +123,15 @@ tryCatch({
     }
     
     if (!is.na(val_fid)) {
+      # Normalizamos a 6 decimales para evitar diferencias microscópicas
+      val_fid <- round(val_fid, 6)
       prev_fid <- old_state[["multiplaza_valor"]]
+      prev_num <- suppressWarnings(as.numeric(prev_fid))
       
-      # Verificación de tolerancia (1e-6) en vez de != para evitar fallos de precisión decimal
-      if (is.null(prev_fid) || is.na(prev_fid) || abs(val_fid - as.numeric(prev_fid)) > 1e-6) {
+      cat("Valor en JSON previo:", prev_num, "\n")
+      cat("Valor nuevo calculado:", val_fid, "\n")
+      
+      if (is.null(prev_num) || is.na(prev_num) || abs(val_fid - prev_num) > 1e-5) {
         inv_fid <- val_fid * fop_multi
         msg_fid <- paste0(
           fecha_hoy, "\n",
@@ -127,7 +143,11 @@ tryCatch({
       } else {
         cat("Sin cambios en Fiduciaria Reservas.\n")
       }
+      
+      # Guardado inmediato del estado para Fiduciaria
       new_state[["multiplaza_valor"]] <- val_fid 
+      save_state(new_state, state_file)
+      
     } else {
       cat("ADVERTENCIA: No se pudo extraer un valor válido de Fiduciaria Reservas.\n")
     }
@@ -143,7 +163,6 @@ tryCatch({
   cat("2. PROCESANDO AFI UNIVERSAL\n")
   cat("==========================================\n")
 
-  # Capturar las variables con respaldo (fallback) seguro si están vacías o en NA
   m_liq <- suppressWarnings(as.numeric(Sys.getenv("MULT_LIQ")))
   if (is.na(m_liq)) m_liq <- 58.291955
   
@@ -184,9 +203,11 @@ tryCatch({
       }
       
       if (!is.na(val_num)) {
+        val_num <- round(val_num, 6)
         prev_val <- old_state[[f$key]]
+        prev_num <- suppressWarnings(as.numeric(prev_val))
         
-        if (is.null(prev_val) || is.na(prev_val) || abs(val_num - as.numeric(prev_val)) > 1e-6) {
+        if (is.null(prev_num) || is.na(prev_num) || abs(val_num - prev_num) > 1e-5) {
           val_inv <- val_num * f$mult
           simbolo <- if (f$code == "DOLR") "US$" else "RD$"
           
@@ -201,6 +222,7 @@ tryCatch({
           cat("Sin cambios para", f$name, "\n")
         }
         new_state[[f$key]] <- val_num
+        save_state(new_state, state_file)
       }
     }
   }
@@ -223,7 +245,7 @@ tryCatch({
     txt_cev <- content(res_cev_active, "text", encoding = "UTF-8")
     
     isin_objetivo <- "DO9035100120"
-    trades_vistos <- old_state[["otc_trades_vistos"]]
+    trades_vistos <- unlist(old_state[["otc_trades_vistos"]])
     if (is.null(trades_vistos)) trades_vistos <- c()
     
     if (grepl(isin_objetivo, txt_cev)) {
@@ -232,34 +254,37 @@ tryCatch({
       json_cev <- tryCatch({ fromJSON(txt_cev) }, error = function(e) NULL)
       
       if (!is.null(json_cev)) {
-        df_cev <- as.data.frame(json_cev)
-        
-        filas_coincidentes <- which(apply(df_cev, 1, function(row) any(grepl(isin_objetivo, row, ignore.case = TRUE))))
-        
-        if (length(filas_coincidentes) > 0) {
-          for (idx in filas_coincidentes) {
-            fila <- df_cev[idx, ]
-            row_str <- paste(unname(unlist(fila)), collapse = "_")
-            trade_id <- paste0(isin_objetivo, "_", gsub("[^a-zA-Z0-9_]", "", row_str))
-            
-            if (!(trade_id %in% trades_vistos)) {
-              precio_limpio <- if (!is.null(fila$precioLimpio)) fila$precioLimpio else if (!is.null(fila$precio)) fila$precio else "Consultar"
-              hora_pacto <- if (!is.null(fila$horaPacto)) fila$horaPacto else if (!is.null(fila$hora)) fila$hora else fecha_hoy
+        tryCatch({
+          df_cev <- as.data.frame(json_cev)
+          filas_coincidentes <- which(apply(df_cev, 1, function(row) any(grepl(isin_objetivo, row, ignore.case = TRUE))))
+          
+          if (length(filas_coincidentes) > 0) {
+            for (idx in filas_coincidentes) {
+              fila <- df_cev[idx, ]
+              row_str <- paste(unname(unlist(fila)), collapse = "_")
+              trade_id <- paste0(isin_objetivo, "_", gsub("[^a-zA-Z0-9_]", "", row_str))
               
-              msg_otc <- paste0(
-                "FOP Multiplaza OTC (CEVALDOM)\n",
-                "ISIN: ", isin_objetivo, "\n",
-                "Hora pacto: ", hora_pacto, "\n",
-                "Precio limpio: ", precio_limpio
-              )
-              send_telegram(msg_otc)
-              cat("Notificación enviada a Telegram para CEVALDOM.\n")
-              trades_vistos <- c(trades_vistos, trade_id)
-            } else {
-              cat("La transacción OTC ya fue notificada previamente.\n")
+              if (!(trade_id %in% trades_vistos)) {
+                precio_limpio <- if (!is.null(fila$precioLimpio)) fila$precioLimpio else if (!is.null(fila$precio)) fila$precio else "Consultar"
+                hora_pacto <- if (!is.null(fila$horaPacto)) fila$horaPacto else if (!is.null(fila$hora)) fila$hora else fecha_hoy
+                
+                msg_otc <- paste0(
+                  "FOP Multiplaza OTC (CEVALDOM)\n",
+                  "ISIN: ", isin_objetivo, "\n",
+                  "Hora pacto: ", hora_pacto, "\n",
+                  "Precio limpio: ", precio_limpio
+                )
+                send_telegram(msg_otc)
+                cat("Notificación enviada a Telegram para CEVALDOM.\n")
+                trades_vistos <- c(trades_vistos, trade_id)
+              } else {
+                cat("La transacción OTC ya fue notificada previamente.\n")
+              }
             }
           }
-        }
+        }, error = function(e) {
+          cat("Error procesando estructura del data frame de CEVALDOM:", e$message, "\n")
+        })
       } else {
         trade_id <- paste0(isin_objetivo, "_", fecha_hoy)
         if (!(trade_id %in% trades_vistos)) {
@@ -274,14 +299,13 @@ tryCatch({
       }
       
       new_state[["otc_trades_vistos"]] <- tail(trades_vistos, 50)
+      save_state(new_state, state_file)
     } else {
       cat("No se encontraron transacciones hoy para el ISIN", isin_objetivo, "\n")
     }
   }
 
-  # Guardar estado persistente en el archivo JSON
-  write_json(new_state, state_file, auto_unbox = TRUE, pretty = TRUE)
-  cat("\n--- PROCESO FINALIZADO --- Estado guardado en", state_file, "\n")
+  cat("\n--- PROCESO FINALIZADO COMPLETO ---\n")
 
 }, error = function(e) {
   send_telegram(paste0("Error en script.R: ", e$message))
