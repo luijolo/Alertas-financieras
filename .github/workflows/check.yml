@@ -40,6 +40,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FOP_GR: ${{ vars.FOP_GR }}
           MULT_LIQ: ${{ vars.MULT_LIQ }}
           MULT_FLEX: ${{ vars.MULT_FLEX }}
           MULT_DOLAR: ${{ vars.MULT_DOLAR }}
