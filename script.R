@@ -51,66 +51,82 @@ tryCatch({
   cat("1. PROCESANDO FIDUCIARIA RESERVAS (Headless)\n")
   cat("==========================================\n")
   
-  # Configurar Chrome para evitar que colapse por falta de permisos en GitHub Actions
   Sys.setenv(CHROMOTE_EXTRA_ARGS = "--no-sandbox --disable-dev-shm-usage")
   
-  url_fid <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
+  url_fid <- paste0("https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/?nocache=", as.numeric(Sys.time()))
+  
+  val_fid <- NA
+  val_raw <- NA
   
   tryCatch({
     cat("Iniciando navegador Chrome headless...\n")
-    # Inicializar la sesión del navegador
     b <- chromote::ChromoteSession$new()
     
-    # Navegar a la página
     cat("Navegando a Fiduciaria Reservas...\n")
     b$Page$navigate(url_fid)
     
-    # Esperamos 8 segundos. Esto permite que los scripts de protección (Cloudflare/Akamai)
-    # terminen de validar el navegador y el DOM cargue completamente los precios.
-    cat("Esperando 8s a que la página renderice y pase los firewalls...\n")
+    cat("Esperando 8s a que la página renderice...\n")
     Sys.sleep(8)
     
-    # Extraer todo el código HTML de la página ya procesada
     doc <- b$Runtime$evaluate("document.documentElement.outerHTML")
     html_raw_fid <- doc$result$value
-    
-    # Cerrar el navegador para liberar memoria
     b$close()
     
-    # Usamos la misma expresión regular de antes, que ignora el ruido y atrapa el número
-    patron <- "(?si)Valor patrimonial de los valores.*?([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]{2,6})"
-    coincidencia <- str_match(html_raw_fid, patron)
+    # Parsear con rvest para buscar de forma estructurada
+    html_obj <- read_html(html_raw_fid)
     
-    if (!is.na(coincidencia[1, 2])) {
-      val_raw <- coincidencia[1, 2]
-      val_fid <- parse_number_dr(val_raw)
+    # Estrategia 1: Buscar estrictamente en celdas de tablas (donde la página publica los valores)
+    nodo_valor <- html_node(
+      html_obj, 
+      xpath = "//tr[td[1][contains(normalize-space(), 'Valor patrimonial de los valores')]]/td[2]"
+    )
+    
+    if (!is.null(nodo_valor) && !is.na(nodo_valor)) {
+      val_raw <- html_text(nodo_valor, trim = TRUE)
+    }
+    
+    # Estrategia 2: Si no está en tabla, buscar por texto cercano pero con un Regex estricto de montos altos (>100)
+    if (is.na(val_raw) || nchar(val_raw) == 0) {
+      texto_pagina <- html_text2(html_obj)
+      # Este patrón busca específicamente números con formato de miles (ej: 1,082.34 o 1082.34) ignorando decimales pequeños sueltos
+      patron_estricto <- "(?i)Valor patrimonial de los valores[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]{2,6})"
+      coincidencia <- str_match(texto_pagina, patron_estricto)
       
-      cat("Valor cuota Fiduciaria detectado:", val_fid, "\n")
-      
-      if (!is.na(val_fid)) {
-        prev_fid <- old_state[["multiplaza_valor"]]
-        if (is.null(prev_fid) || val_fid != prev_fid) {
-          inv_fid <- val_fid * 20
-          msg_fid <- paste0(
-            fecha_hoy, "\n",
-            "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
-            "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
-          )
-          send_telegram(msg_fid)
-          cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
-        } else {
-          cat("Sin cambios en Fiduciaria Reservas.\n")
-        }
-        new_state[["multiplaza_valor"]] <- val_fid 
+      if (!is.na(coincidencia[1, 2])) {
+        val_raw <- coincidencia[1, 2]
       }
+    }
+    
+    if (!is.na(val_raw)) {
+      val_fid <- parse_number_dr(val_raw)
+    }
+    
+    cat("Valor bruto detectado:", val_raw, "\n")
+    cat("Valor cuota Fiduciaria:", val_fid, "\n")
+    
+    if (!is.na(val_fid)) {
+      prev_fid <- old_state[["multiplaza_valor"]]
+      if (is.null(prev_fid) || val_fid != prev_fid) {
+        inv_fid <- val_fid * 20
+        msg_fid <- paste0(
+          fecha_hoy, "\n",
+          "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
+          "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
+        )
+        send_telegram(msg_fid)
+        cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
+      } else {
+        cat("Sin cambios en Fiduciaria Reservas.\n")
+      }
+      new_state[["multiplaza_valor"]] <- val_fid 
     } else {
-      cat("Advertencia: La página cargó con éxito, pero no se encontró la frase 'Valor patrimonial de los valores'.\n")
+      cat("ADVERTENCIA: No se pudo extraer un valor válido de Fiduciaria Reservas.\n")
     }
     
   }, error = function(e) {
     cat("Error al ejecutar Chrome Headless:", e$message, "\n")
   })
-
+             
   # ==========================================
   # 2. AFI UNIVERSAL
   # ==========================================
