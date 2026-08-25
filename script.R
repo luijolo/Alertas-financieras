@@ -7,7 +7,7 @@ start_time <- Sys.time()
 token <- Sys.getenv("TELEGRAM_TOKEN")
 chat_id <- Sys.getenv("TELEGRAM_CHAT_ID")
 
-# Forzar la zona horaria correcta de Santo Domingo para evitar desfases de fecha nocturnos
+# Forzar la zona horaria correcta de Santo Domingo
 Sys.setenv(TZ = "America/Santo_Domingo")
 
 send_telegram <- function(msg) {
@@ -18,8 +18,6 @@ send_telegram <- function(msg) {
   }
 }
 
-Sys.setenv(TZ = "America/Santo_Domingo")
-  fecha_hoy <- format(Sys.Date(), "%d/%m/%Y")
 Sys.setenv(CHROMOTE_CHROME_ARGS = "--no-sandbox --disable-dev-shm-usage --disable-gpu")
 
 parse_number_dr <- function(text) {
@@ -77,10 +75,8 @@ tryCatch({
     html_raw_fid <- doc$result$value
     b$close()
     
-    # Parsear con rvest para buscar de forma estructurada
     html_obj <- read_html(html_raw_fid)
     
-    # Estrategia 1: Buscar estrictamente en celdas de tablas (donde la página publica los valores)
     nodo_valor <- html_node(
       html_obj, 
       xpath = "//tr[td[1][contains(normalize-space(), 'Valor patrimonial de los valores')]]/td[2]"
@@ -90,10 +86,8 @@ tryCatch({
       val_raw <- html_text(nodo_valor, trim = TRUE)
     }
     
-    # Estrategia 2: Si no está en tabla, buscar por texto cercano pero con un Regex estricto de montos altos (>100)
     if (is.na(val_raw) || nchar(val_raw) == 0) {
       texto_pagina <- html_text2(html_obj)
-      # Este patrón busca específicamente números con formato de miles (ej: 1,082.34 o 1082.34) ignorando decimales pequeños sueltos
       patron_estricto <- "(?i)Valor patrimonial de los valores[^0-9]*([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]{2,6})"
       coincidencia <- str_match(texto_pagina, patron_estricto)
       
@@ -109,16 +103,24 @@ tryCatch({
     cat("Valor bruto detectado:", val_raw, "\n")
     cat("Valor cuota Fiduciaria:", val_fid, "\n")
 
-fop_multi <- as.numeric(Sys.getenv("FOP_GR"))
+    # Solución de variable de entorno con respaldo (fallback)
+    fop_multi_env <- Sys.getenv("FOP_GR")
+    fop_multi <- suppressWarnings(as.numeric(fop_multi_env))
+    if (is.na(fop_multi)) {
+      cat("ADVERTENCIA: FOP_GR no definido correctamente. Usando 20 por defecto.\n")
+      fop_multi <- 20
+    }
     
     if (!is.na(val_fid)) {
       prev_fid <- old_state[["multiplaza_valor"]]
-      if (is.null(prev_fid) || val_fid != prev_fid) {
+      
+      # Verificación de tolerancia (1e-6) en vez de != para evitar fallos de precisión decimal
+      if (is.null(prev_fid) || is.na(prev_fid) || abs(val_fid - as.numeric(prev_fid)) > 1e-6) {
         inv_fid <- val_fid * fop_multi
         msg_fid <- paste0(
           fecha_hoy, "\n",
-          "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
-          "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
+          "Valor cuota FOP Multiplaza RD$ ", format(val_fid, nsmall = 6), "\n",
+          "Valor inversión RD$ ", format(inv_fid, big.mark = ",", nsmall = 2)
         )
         send_telegram(msg_fid)
         cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
@@ -133,7 +135,7 @@ fop_multi <- as.numeric(Sys.getenv("FOP_GR"))
   }, error = function(e) {
     cat("Error al ejecutar Chrome Headless:", e$message, "\n")
   })
-             
+              
   # ==========================================
   # 2. AFI UNIVERSAL
   # ==========================================
@@ -141,12 +143,15 @@ fop_multi <- as.numeric(Sys.getenv("FOP_GR"))
   cat("2. PROCESANDO AFI UNIVERSAL\n")
   cat("==========================================\n")
 
-  # Capturar las variables de entorno de GitHub, con validación de seguridad (fallback a valores por defecto)
-  m_liq <- as.numeric(Sys.getenv("MULT_LIQ"))
+  # Capturar las variables con respaldo (fallback) seguro si están vacías o en NA
+  m_liq <- suppressWarnings(as.numeric(Sys.getenv("MULT_LIQ")))
+  if (is.na(m_liq)) m_liq <- 58.291955
   
-  m_flex <- as.numeric(Sys.getenv("MULT_FLEX"))
+  m_flex <- suppressWarnings(as.numeric(Sys.getenv("MULT_FLEX")))
+  if (is.na(m_flex)) m_flex <- 1
   
-  m_dolar <- as.numeric(Sys.getenv("MULT_DOLAR"))
+  m_dolar <- suppressWarnings(as.numeric(Sys.getenv("MULT_DOLAR")))
+  if (is.na(m_dolar)) m_dolar <- 1
 
   fondos_afi <- list(
     list(code = "LIQUID", key = "uni_liq", name = "Cuota Universal Liquidez", mult = m_liq),
@@ -181,7 +186,7 @@ fop_multi <- as.numeric(Sys.getenv("FOP_GR"))
       if (!is.na(val_num)) {
         prev_val <- old_state[[f$key]]
         
-        if (is.null(prev_val) || val_num != prev_val) {
+        if (is.null(prev_val) || is.na(prev_val) || abs(val_num - as.numeric(prev_val)) > 1e-6) {
           val_inv <- val_num * f$mult
           simbolo <- if (f$code == "DOLR") "US$" else "RD$"
           
