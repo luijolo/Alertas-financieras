@@ -7,6 +7,9 @@ start_time <- Sys.time()
 token <- Sys.getenv("TELEGRAM_TOKEN")
 chat_id <- Sys.getenv("TELEGRAM_CHAT_ID")
 
+# Forzar la zona horaria correcta de Santo Domingo para evitar desfases de fecha nocturnos
+Sys.setenv(TZ = "America/Santo_Domingo")
+
 send_telegram <- function(msg) {
   url <- paste0("https://api.telegram.org/bot", token, "/sendMessage")
   res <- POST(url, body = list(chat_id = chat_id, text = msg), encode = "form")
@@ -15,6 +18,8 @@ send_telegram <- function(msg) {
   }
 }
 
+Sys.setenv(TZ = "America/Santo_Domingo")
+  fecha_hoy <- format(Sys.Date(), "%d/%m/%Y")
 Sys.setenv(CHROMOTE_CHROME_ARGS = "--no-sandbox --disable-dev-shm-usage --disable-gpu")
 
 parse_number_dr <- function(text) {
