@@ -29,8 +29,8 @@ jobs:
           options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/jammy/latest"))
           install.packages(c("httr", "rvest", "jsonlite", "stringr", "chromote"))
         shell: Rscript {0}
-        
-- name: Instalar Google Chrome
+
+      - name: Instalar Google Chrome
         uses: browser-actions/setup-chrome@v1
         with:
           chrome-version: stable
