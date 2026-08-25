@@ -15,6 +15,8 @@ send_telegram <- function(msg) {
   }
 }
 
+Sys.setenv(CHROMOTE_CHROME_ARGS = "--no-sandbox --disable-dev-shm-usage --disable-gpu")
+
 parse_number_dr <- function(text) {
   if (is.na(text) || is.null(text) || nchar(as.character(text)) == 0) return(NA)
   clean_text <- gsub("[^0-9.,]", "", as.character(text))
