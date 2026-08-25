@@ -108,11 +108,13 @@ tryCatch({
     
     cat("Valor bruto detectado:", val_raw, "\n")
     cat("Valor cuota Fiduciaria:", val_fid, "\n")
+
+fop_multi <- as.numeric(Sys.getenv("FOP_GR"))
     
     if (!is.na(val_fid)) {
       prev_fid <- old_state[["multiplaza_valor"]]
       if (is.null(prev_fid) || val_fid != prev_fid) {
-        inv_fid <- val_fid * 20
+        inv_fid <- val_fid * fop_multi
         msg_fid <- paste0(
           fecha_hoy, "\n",
           "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
@@ -141,13 +143,10 @@ tryCatch({
 
   # Capturar las variables de entorno de GitHub, con validación de seguridad (fallback a valores por defecto)
   m_liq <- as.numeric(Sys.getenv("MULT_LIQ"))
-  if (is.na(m_liq)) m_liq <- 58.291955
   
   m_flex <- as.numeric(Sys.getenv("MULT_FLEX"))
-  if (is.na(m_flex)) m_flex <- 1
   
   m_dolar <- as.numeric(Sys.getenv("MULT_DOLAR"))
-  if (is.na(m_dolar)) m_dolar <- 1
 
   fondos_afi <- list(
     list(code = "LIQUID", key = "uni_liq", name = "Cuota Universal Liquidez", mult = m_liq),
