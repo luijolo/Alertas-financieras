@@ -24,10 +24,10 @@ jobs:
       - name: Configurar R
         uses: r-lib/actions/setup-r@v2
 
-      - name: Instalar dependencias
+      - name: Instalar dependencias de R
         run: |
           options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/jammy/latest"))
-          install.packages(c("httr", "readxl", "digest", "jsonlite", "rvest", "stringr"))
+          install.packages(c("httr", "rvest", "jsonlite", "stringr", "chromote"))
         shell: Rscript {0}
 
       - name: Ejecutar Script de Fondos
