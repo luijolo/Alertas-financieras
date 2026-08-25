@@ -42,7 +42,7 @@ tryCatch({
   # Registra la fecha/hora actual para forzar cambio en Git en cada corrida
   new_state[["ultima_ejecucion"]] <- format(Sys.time(), "%Y-%m-%d %H:%M:%S AST")
 
-# ==========================================
+  # ==========================================
   # 1. FIDUCIARIA RESERVAS
   # ==========================================
   cat("\n==========================================\n")
@@ -50,48 +50,46 @@ tryCatch({
   cat("==========================================\n")
   url_fid <- "https://www.fiduciariareservas.com/proyectos-oferta-publica/fideicomiso-de-oferta-publica-de-valores-multiplaza-fr-n02/"
   
-  # Agregamos un timeout de 15 segundos por si el servidor se queda colgado
+  # Timeout de 15s y manejo de errores por si el servidor se queda colgado
   res_fid <- tryCatch(GET(url_fid, headers_browser, timeout(15)), error = function(e) {
     cat("Error de conexión:", e$message, "\n")
     return(NULL)
   })
   
   if (!is.null(res_fid)) {
-    # Verificamos si el código de estado es 200 (OK)
     if (status_code(res_fid) == 200) {
       html_raw_fid <- content(res_fid, "text", encoding = "UTF-8")
       
-      # 1. Buscar el bloque específico usando (?si)
-      bloque_texto <- str_extract(html_raw_fid, "(?si)Valor patrimonial de los valores.*?RD\\$\\s*[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
+      # Expresión regular: Busca la frase, ignora texto medio y captura el número con str_match
+      patron <- "(?si)Valor patrimonial de los valores.*?([0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]{2,6})"
+      coincidencia <- str_match(html_raw_fid, patron)
       
-      # 2. Extraer limpiamente solo la porción numérica
-      val_raw <- str_extract(bloque_texto, "[0-9]{1,3}(?:,[0-9]{3})*\\.[0-9]+")
-      
-      # 3. Convertir a numérico
-      val_fid <- parse_number_dr(val_raw)
-      
-      cat("Valor cuota Fiduciaria detectado:", val_fid, "\n")
-      
-      if (!is.na(val_fid)) {
-        prev_fid <- old_state[["multiplaza_valor"]]
-        if (is.null(prev_fid) || val_fid != prev_fid) {
-          inv_fid <- val_fid * 20
-          msg_fid <- paste0(
-            fecha_hoy, "\n",
-            "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
-            "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
-          )
-          send_telegram(msg_fid)
-          cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
-        } else {
-          cat("Sin cambios en Fiduciaria Reservas.\n")
+      if (!is.na(coincidencia[1, 2])) {
+        val_raw <- coincidencia[1, 2]
+        val_fid <- parse_number_dr(val_raw)
+        
+        cat("Valor cuota Fiduciaria detectado:", val_fid, "\n")
+        
+        if (!is.na(val_fid)) {
+          prev_fid <- old_state[["multiplaza_valor"]]
+          if (is.null(prev_fid) || val_fid != prev_fid) {
+            inv_fid <- val_fid * 20
+            msg_fid <- paste0(
+              fecha_hoy, "\n",
+              "Valor cuota FOP Multiplaza RD$", format(val_fid, nsmall = 6), "\n",
+              "Valor inversión RD$", format(inv_fid, big.mark = ",", nsmall = 2)
+            )
+            send_telegram(msg_fid)
+            cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
+          } else {
+            cat("Sin cambios en Fiduciaria Reservas.\n")
+          }
+          new_state[["multiplaza_valor"]] <- val_fid 
         }
-        new_state[["multiplaza_valor"]] <- val_fid 
       } else {
-        cat("Advertencia: No se pudo extraer el valor de la cuota en Fiduciaria Reservas.\n")
+        cat("Advertencia: No se encontró la frase o el valor numérico en Fiduciaria Reservas.\n")
       }
     } else {
-      # Si el servidor responde, pero no es un 200 (ej. 403, 404, 500)
       cat("Error HTTP Fiduciaria Reservas: El servidor respondió con el código", status_code(res_fid), "\n")
     }
   } else {
@@ -105,10 +103,20 @@ tryCatch({
   cat("2. PROCESANDO AFI UNIVERSAL\n")
   cat("==========================================\n")
 
+  # Capturar las variables de entorno de GitHub, con validación de seguridad (fallback a valores por defecto)
+  m_liq <- as.numeric(Sys.getenv("MULT_LIQ"))
+  if (is.na(m_liq)) m_liq <- 58.291955
+  
+  m_flex <- as.numeric(Sys.getenv("MULT_FLEX"))
+  if (is.na(m_flex)) m_flex <- 1
+  
+  m_dolar <- as.numeric(Sys.getenv("MULT_DOLAR"))
+  if (is.na(m_dolar)) m_dolar <- 1
+
   fondos_afi <- list(
-    list(code = "LIQUID", key = "uni_liq", name = "Cuota Universal Liquidez", mult = 58.291955),
-    list(code = "FLEX", key = "dep_flex", name = "Cuota Dep. Financiero Flexible", mult = 1),
-    list(code = "DOLR", key = "plazo_dol", name = "Cuota Plazo mensual dólar", mult = 1)
+    list(code = "LIQUID", key = "uni_liq", name = "Cuota Universal Liquidez", mult = m_liq),
+    list(code = "FLEX", key = "dep_flex", name = "Cuota Dep. Financiero Flexible", mult = m_flex),
+    list(code = "DOLR", key = "plazo_dol", name = "Cuota Plazo mensual dólar", mult = m_dolar)
   )
 
   for (f in fondos_afi) {
@@ -148,7 +156,7 @@ tryCatch({
             "Valor inversion ", simbolo, format(val_inv, big.mark = ",", nsmall = 2)
           )
           send_telegram(msg_afi)
-          cat("Notificación enviada para", f$name, ":", val_num, "\n")
+          cat("Notificación enviada para", f$name, ":", val_num, " (Multiplicador usado:", f$mult, ")\n")
         } else {
           cat("Sin cambios para", f$name, "\n")
         }
