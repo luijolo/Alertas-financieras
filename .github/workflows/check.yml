@@ -29,6 +29,11 @@ jobs:
           options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/jammy/latest"))
           install.packages(c("httr", "rvest", "jsonlite", "stringr", "chromote"))
         shell: Rscript {0}
+        
+- name: Instalar Google Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
 
       - name: Ejecutar Script de Fondos
         timeout-minutes: 25 # Garantiza que la ejecución del script no exceda los 25 minutos
