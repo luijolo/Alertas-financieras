@@ -18,7 +18,7 @@ send_telegram <- function(msg) {
   }
 }
 
-# Función auxiliar para guardar el estado de forma segura e inmediata
+# Guardado inmediato e ininterrumpido del estado
 save_state <- function(state, file) {
   tryCatch({
     write_json(state, file, auto_unbox = TRUE, pretty = TRUE)
@@ -49,8 +49,7 @@ tryCatch({
   old_state <- list()
   if (file.exists(state_file) && file.info(state_file)$size > 2) {
     tryCatch({ 
-      # simplifyVector = FALSE garantiza que old_state sea una lista estándar de R
-      parsed_json <- fromJSON(state_file, simplifyVector = FALSE) 
+      parsed_json <- fromJSON(state_file) 
       if (is.list(parsed_json)) old_state <- parsed_json
     }, error = function(e) list())
   }
@@ -123,15 +122,18 @@ tryCatch({
     }
     
     if (!is.na(val_fid)) {
-      # Normalizamos a 6 decimales para evitar diferencias microscópicas
       val_fid <- round(val_fid, 6)
-      prev_fid <- old_state[["multiplaza_valor"]]
-      prev_num <- suppressWarnings(as.numeric(prev_fid))
+      
+      # Extracción limpia y aplanada del valor previo
+      raw_prev <- unlist(old_state[["multiplaza_valor"]])
+      prev_num <- if (!is.null(raw_prev) && length(raw_prev) > 0) suppressWarnings(as.numeric(raw_prev[1])) else NA
       
       cat("Valor en JSON previo:", prev_num, "\n")
       cat("Valor nuevo calculado:", val_fid, "\n")
       
-      if (is.null(prev_num) || is.na(prev_num) || abs(val_fid - prev_num) > 1e-5) {
+      hubo_cambio <- is.na(prev_num) || abs(val_fid - prev_num) > 1e-5
+      
+      if (hubo_cambio) {
         inv_fid <- val_fid * fop_multi
         msg_fid <- paste0(
           fecha_hoy, "\n",
@@ -141,10 +143,9 @@ tryCatch({
         send_telegram(msg_fid)
         cat("Notificación enviada a Telegram para Fiduciaria Reservas.\n")
       } else {
-        cat("Sin cambios en Fiduciaria Reservas.\n")
+        cat("Sin cambios en Fiduciaria Reservas. (No se envía mensaje)\n")
       }
       
-      # Guardado inmediato del estado para Fiduciaria
       new_state[["multiplaza_valor"]] <- val_fid 
       save_state(new_state, state_file)
       
@@ -204,10 +205,11 @@ tryCatch({
       
       if (!is.na(val_num)) {
         val_num <- round(val_num, 6)
-        prev_val <- old_state[[f$key]]
-        prev_num <- suppressWarnings(as.numeric(prev_val))
         
-        if (is.null(prev_num) || is.na(prev_num) || abs(val_num - prev_num) > 1e-5) {
+        raw_prev <- unlist(old_state[[f$key]])
+        prev_num <- if (!is.null(raw_prev) && length(raw_prev) > 0) suppressWarnings(as.numeric(raw_prev[1])) else NA
+        
+        if (is.na(prev_num) || abs(val_num - prev_num) > 1e-5) {
           val_inv <- val_num * f$mult
           simbolo <- if (f$code == "DOLR") "US$" else "RD$"
           
@@ -217,7 +219,7 @@ tryCatch({
             "Valor inversion ", simbolo, format(val_inv, big.mark = ",", nsmall = 2)
           )
           send_telegram(msg_afi)
-          cat("Notificación enviada para", f$name, ":", val_num, " (Multiplicador usado:", f$mult, ")\n")
+          cat("Notificación enviada para", f$name, ":", val_num, "\n")
         } else {
           cat("Sin cambios para", f$name, "\n")
         }
