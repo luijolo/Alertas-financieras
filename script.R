@@ -252,7 +252,7 @@ tryCatch({
   if (!is.null(res_cev_active) && status_code(res_cev_active) == 200) {
     txt_cev <- content(res_cev_active, "text", encoding = "UTF-8")
     
-    isin_objetivo <- "DO9035100120"
+    isin_objetivo <- "DO1002261522"
     trades_vistos <- unlist(old_state[["otc_trades_vistos"]])
     if (is.null(trades_vistos)) trades_vistos <- c()
     
