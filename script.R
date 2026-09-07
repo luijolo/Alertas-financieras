@@ -235,7 +235,7 @@ tryCatch({
     }
   }
 
-  # ==========================================
+# ==========================================
   # 3. CEVALDOM (API de Precios OTC)
   # ==========================================
   cat("\n==========================================\n")
@@ -249,21 +249,33 @@ tryCatch({
   
   res_cev_active <- if (!is.null(res_cev_get) && status_code(res_cev_get) == 200) res_cev_get else res_cev_post
   
+  trades_vistos <- unlist(old_state[["otc_trades_vistos"]])
+  if (is.null(trades_vistos)) trades_vistos <- c()
+  
   if (!is.null(res_cev_active) && status_code(res_cev_active) == 200) {
     txt_cev <- content(res_cev_active, "text", encoding = "UTF-8")
-    
     isin_objetivo <- "DO1005213025"
-    trades_vistos <- unlist(old_state[["otc_trades_vistos"]])
-    if (is.null(trades_vistos)) trades_vistos <- c()
     
-    if (grepl(isin_objetivo, txt_cev)) {
+    cat("Respuesta de CEVALDOM recibida (longitud caracteres):", nchar(txt_cev), "\n")
+    
+    if (grepl(isin_objetivo, txt_cev, ignore.case = TRUE)) {
       cat("¡ISIN", isin_objetivo, "detectado en la API de CEVALDOM!\n")
       
-      json_cev <- tryCatch({ fromJSON(txt_cev) }, error = function(e) NULL)
+      json_cev <- tryCatch({ fromJSON(txt_cev, simplifyDataFrame = TRUE) }, error = function(e) {
+        cat("Error al parsear JSON de CEVALDOM:", e$message, "\n")
+        NULL
+      })
       
+      # Normalizar si viene dentro de una clave contenedora (ej. $data o $result)
       if (!is.null(json_cev)) {
-        tryCatch({
+        if (is.list(json_cev) && !is.data.frame(json_cev)) {
+          posible_df <- json_cev[[which(sapply(json_cev, is.data.frame))[1]]]
+          if (!is.null(posible_df)) df_cev <- posible_df else df_cev <- as.data.frame(json_cev)
+        } else {
           df_cev <- as.data.frame(json_cev)
+        }
+        
+        tryCatch({
           filas_coincidentes <- which(apply(df_cev, 1, function(row) any(grepl(isin_objetivo, row, ignore.case = TRUE))))
           
           if (length(filas_coincidentes) > 0) {
@@ -273,8 +285,8 @@ tryCatch({
               trade_id <- paste0(isin_objetivo, "_", gsub("[^a-zA-Z0-9_]", "", row_str))
               
               if (!(trade_id %in% trades_vistos)) {
-                precio_limpio <- if (!is.null(fila$precioLimpio)) fila$precioLimpio else if (!is.null(fila$precio)) fila$precio else "Consultar"
-                hora_pacto <- if (!is.null(fila$horaPacto)) fila$horaPacto else if (!is.null(fila$hora)) fila$hora else fecha_hoy
+                precio_limpio <- if ("precioLimpio" %in% names(fila) && !is.null(fila$precioLimpio)) fila$precioLimpio else if ("precio" %in% names(fila) && !is.null(fila$precio)) fila$precio else "Consultar"
+                hora_pacto <- if ("horaPacto" %in% names(fila) && !is.null(fila$horaPacto)) fila$horaPacto else if ("hora" %in% names(fila) && !is.null(fila$hora)) fila$hora else fecha_hoy
                 
                 msg_otc <- paste0(
                   "FOP Multiplaza OTC (CEVALDOM)\n",
@@ -293,25 +305,17 @@ tryCatch({
         }, error = function(e) {
           cat("Error procesando estructura del data frame de CEVALDOM:", e$message, "\n")
         })
-      } else {
-        trade_id <- paste0(isin_objetivo, "_", fecha_hoy)
-        if (!(trade_id %in% trades_vistos)) {
-          msg_otc <- paste0(
-            "FOP Multiplaza OTC (CEVALDOM)\n",
-            "Actividad detectada para el ISIN ", isin_objetivo, " el ", fecha_hoy
-          )
-          send_telegram(msg_otc)
-          cat("Notificación enviada a Telegram para CEVALDOM (Modo Respaldo).\n")
-          trades_vistos <- c(trades_vistos, trade_id)
-        }
       }
-      
-      new_state[["otc_trades_vistos"]] <- tail(trades_vistos, 50)
-      save_state(new_state, state_file)
     } else {
       cat("No se encontraron transacciones hoy para el ISIN", isin_objetivo, "\n")
     }
+  } else {
+    cat("ADVERTENCIA: No se pudo conectar con la API de CEVALDOM o devolvió código diferente a 200.\n")
   }
+  
+  # Asegurar que siempre se guarde el estado actualizado de los trades vistos
+  new_state[["otc_trades_vistos"]] <- tail(trades_vistos, 50)
+  save_state(new_state, state_file)
 
   cat("\n--- PROCESO FINALIZADO COMPLETO ---\n")
 
