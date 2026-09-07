@@ -236,58 +236,44 @@ tryCatch({
   }
 
 # ==========================================
-  # 3. CEVALDOM (API de Precios OTC)
+  # 3. CEVALDOM (API vía Headless Chrome)
   # ==========================================
   cat("\n==========================================\n")
-  cat("3. PROCESANDO CEVALDOM API\n")
+  cat("3. PROCESANDO CEVALDOM API (Vía Headless)\n")
   cat("==========================================\n")
   
-  url_cev_home <- "https://www.cevaldom.com/"
   url_cev_api <- "https://www.cevaldom.com/api/cevaldom/fetch-prices"
-  
-  # Crear un handle de sesión para retener cookies
-  cev_handle <- handle(url_cev_home)
-  
-  # Cabeceras específicas simulando navegación real
-  headers_api <- add_headers(
-    `User-Agent` = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    `Accept` = "application/json, text/plain, */*",
-    `Accept-Language` = "es-ES,es;q=0.9,en;q=0.8",
-    `Referer` = "https://www.cevaldom.com/",
-    `Origin` = "https://www.cevaldom.com"
-  )
+  isin_objetivo <- "DO1005213025"
+  trades_vistos <- unlist(old_state[["otc_trades_vistos"]])
+  if (is.null(trades_vistos)) trades_vistos <- c()
   
   tryCatch({
-    # 1. Visitar la página principal primero para establecer la sesión y obtener cookies
-    res_home <- GET(url_cev_home, handle = cev_handle, headers_browser)
-    cat("Página principal CEVALDOM - Código de estado:", status_code(res_home), "\n")
+    cat("Iniciando navegador Chrome headless para CEVALDOM...\n")
+    b_cev <- chromote::ChromoteSession$new()
     
-    # Pausa breve para simular comportamiento humano
-    Sys.sleep(2)
+    # Navegar a la página principal para establecer la sesión del navegador
+    b_cev$Page$navigate("https://www.cevaldom.com/")
+    Sys.sleep(5)
     
-    # 2. Intentar la petición a la API utilizando el handle de sesión y las cabeceras
-    res_cev_get <- tryCatch(GET(url_cev_api, handle = cev_handle, headers_api), error = function(e) NULL)
-    res_cev_post <- tryCatch(POST(url_cev_api, handle = cev_handle, headers_api), error = function(e) NULL)
+    # Ejecutar un fetch dentro del navegador para sortear el bloqueo 403
+    script_fetch <- sprintf("
+      (async () => {
+        try {
+          const response = await fetch('%s');
+          return await response.text();
+        } catch (err) {
+          return 'ERROR: ' + err.message;
+        }
+      })();
+    ", url_cev_api)
     
-    res_cev_active <- if (!is.null(res_cev_get) && status_code(res_cev_get) == 200) {
-      res_cev_get
-    } else if (!is.null(res_cev_post) && status_code(res_cev_post) == 200) {
-      res_cev_post
-    } else {
-      # Si ambos fallan, capturar el código de estado real del GET para depuración
-      code_err <- if (!is.null(res_cev_get)) status_code(res_cev_get) else "Sin respuesta"
-      cat("ADVERTENCIA: API de CEVALDOM rechazó la conexión. Código HTTP:", code_err, "\n")
-      NULL
-    }
+    res_eval <- b_cev$Runtime$evaluate(script_fetch, awaitPromise = TRUE)
+    b_cev$close()
     
-    trades_vistos <- unlist(old_state[["otc_trades_vistos"]])
-    if (is.null(trades_vistos)) trades_vistos <- c()
+    txt_cev <- res_eval$result$value
     
-    if (!is.null(res_cev_active)) {
-      txt_cev <- content(res_cev_active, "text", encoding = "UTF-8")
-      isin_objetivo <- "DO1005213025"
-      
-      cat("Respuesta de CEVALDOM recibida (longitud caracteres):", nchar(txt_cev), "\n")
+    if (!is.null(txt_cev) && !grepl("^ERROR:", txt_cev) && nchar(txt_cev) > 10) {
+      cat("Respuesta de CEVALDOM obtenida por navegador (longitud caracteres):", nchar(txt_cev), "\n")
       
       if (grepl(isin_objetivo, txt_cev, ignore.case = TRUE)) {
         cat("¡ISIN", isin_objetivo, "detectado en la API de CEVALDOM!\n")
@@ -339,14 +325,16 @@ tryCatch({
       } else {
         cat("No se encontraron transacciones hoy para el ISIN", isin_objetivo, "\n")
       }
+    } else {
+      cat("ADVERTENCIA: No se pudo obtener contenido válido desde el navegador. Respuesta:", txt_cev, "\n")
     }
     
-    new_state[["otc_trades_vistos"]] <- tail(trades_vistos, 50)
-    save_state(new_state, state_file)
-    
   }, error = function(e) {
-    cat("Error general en el bloque de CEVALDOM:", e$message, "\n")
+    cat("Error en el navegador Headless para CEVALDOM:", e$message, "\n")
   })
+  
+  new_state[["otc_trades_vistos"]] <- tail(trades_vistos, 50)
+  save_state(new_state, state_file)
 
   cat("\n--- PROCESO FINALIZADO COMPLETO ---\n")
 
