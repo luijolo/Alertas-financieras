@@ -243,7 +243,7 @@ tryCatch({
   cat("==========================================\n")
   
   url_cev_api <- "https://www.cevaldom.com/api/cevaldom/fetch-prices"
-  isin_objetivo <- "DO1005213025"
+  isin_objetivo <- "DO9035100120"
   trades_vistos <- unlist(old_state[["otc_trades_vistos"]])
   if (is.null(trades_vistos)) trades_vistos <- c()
   
