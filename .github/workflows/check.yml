@@ -3,7 +3,6 @@ name: Alertas financieras
 on:
   workflow_dispatch:
 
-# Previene ejecuciones simultáneas que colisionen al modificar el JSON
 concurrency:
   group: alertas-financieras-group
   cancel-in-progress: false
@@ -14,20 +13,22 @@ permissions:
 jobs:
   check-fondos:
     runs-on: ubuntu-latest
-    timeout-minutes: 25 # Detiene el job completo si excede 25 minutos
+    timeout-minutes: 25
     steps:
       - name: Checkout repositorio
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Descarga el historial completo para permitir `git pull --rebase` sin errores
+          fetch-depth: 0
 
       - name: Configurar R
         uses: r-lib/actions/setup-r@v2
 
-      - name: Instalar dependencias de R
+      - name: Instalar dependencias del sistema y R
         run: |
-          options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/jammy/latest"))
-          install.packages(c("httr", "rvest", "jsonlite", "stringr", "chromote"))
+          sudo apt-get update
+          sudo apt-get install -y libxml2-dev libcurl4-openssl-dev libssl-dev
+          options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/noble/latest"))
+          install.packages(c("httr", "rvest", "jsonlite", "stringr", "chromote"), type = "source")
         shell: Rscript {0}
 
       - name: Instalar Google Chrome
@@ -36,7 +37,7 @@ jobs:
           chrome-version: stable
 
       - name: Ejecutar Script de Fondos
-        timeout-minutes: 25 # Garantiza que la ejecución del script no exceda los 25 minutos
+        timeout-minutes: 25
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -50,7 +51,7 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add estado_hashes.json
+          git add -f estado_hashes.json
           git diff --staged --quiet || git commit -m "Update fondos state"
           git pull --rebase origin main
           git push origin main
